@@ -26,12 +26,15 @@
 
 char response[16000];
 
+int readWattmetre(int device);
 int GetEnvoy(int *pCumul, int *pCurrent);
 void genHtmlDomoticzCommand(char *tmp);
 void log_printf(const char * format, ... );
 void genHtmlESPRelay(char *tmp);
 
-int G_Cumul;
+unsigned long G_resetCounter = 0;
+unsigned long G_lastResetCounter = 0;
+int G_resetGlobalWattmetreSolaire;
 int G_Puissance;
 long G_PuissanceTotalJour;
 unsigned long G_PuissanceTotalAnnee;
@@ -239,6 +242,7 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 			index = index - LOG_DURATION;
         temp = tabDay[index].puissance*62/max;
         if (temp >= 62) temp = 61;
+        if (temp < 0) temp = 0;
 		n += sprintf(&tmp[n], "%c", listData[temp]);
 		}
 
@@ -256,8 +260,6 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 			{
 			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].TpanneauxSolaires*SCALE_FACTOR]);
 			}
-		else
-			n+= sprintf(&tmp[n], "%c,", listData[tabDay[index].TpanneauxSolaires*SCALE_FACTOR]);
 		}
 	for (i = 1 ; i < LOG_DURATION ; i++)
 		{
@@ -267,10 +269,6 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 		if (i < (LOG_DURATION-1))
 			{
 			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].Tcuve*SCALE_FACTOR]);
-			}
-		else
-			{
-			n+= sprintf(&tmp[n], "%c,", listData[tabDay[index].Tcuve*SCALE_FACTOR]);
 			}
 		}
 	for (i = 1 ; i < LOG_DURATION ; i++)
@@ -282,10 +280,6 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 			{
 			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].Tchaudiere*SCALE_FACTOR]);
 			}
-		else
-			{
-			n+= sprintf(&tmp[n], "%c,", listData[tabDay[index].Tchaudiere*SCALE_FACTOR]);
-			}
 		}
 	for (i = 1 ; i < LOG_DURATION ; i++)
 		{
@@ -293,10 +287,6 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 		if (index >= LOG_DURATION)
 			index = index - LOG_DURATION;
 		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].pompe*SCALE_FACTOR]);
-			}
-		else
 			{
 			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].pompe*SCALE_FACTOR]);
 			}
@@ -361,10 +351,7 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 		pTime->tm_mday, (pTime->tm_mon+1), (pTime->tm_year+1900), pTime->tm_hour, pTime->tm_min, pTime->tm_sec, VERSION);
 		 
 	fputs(tmp, fHTML);
-    if (G_Cumul == -1)
-    	n = sprintf(tmp, "<br>Erreur lecture Envoy");
-    else
-    	n = sprintf(tmp, "<br>Puissance=%d W - Cumul total=%d kWh", G_Puissance, G_Cumul);
+    	n = sprintf(tmp, "<br>Puissance Solaire=%d W (Reset=%u) Pconso=%d W Pfournie=%d W", G_Puissance, G_resetGlobalWattmetreSolaire, G_pAppEDF, G_prodEDF);
 	fputs(tmp, fHTML);
 	n = sprintf(tmp, " Journalier=%d Wh Hier=%d Wh Annuel=%d kWh (An n-1=%d kWh)  soit <a>%d km</a><br>", G_PuissanceTotalJour/3600, G_PuissanceTotalJourAvant/3600, G_PuissanceTotalAnnee/3600000, G_PuissanceTotalAnneeAvant/3600000,
 			G_PuissanceTotalAnnee/36000/14);
@@ -373,7 +360,7 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 	fputs(tmp, fHTML);
 	n = sprintf(tmp, "Tarif Normal=%f euros Jour/nuit=%f euros", G_tarifNormal, G_tarifJourNuit);
 	fputs(tmp, fHTML);
-	n = sprintf(tmp, "</CENTER></body></html>", G_Puissance, G_Cumul);
+	n = sprintf(tmp, "</CENTER></body></html>");
 	fputs(tmp, fHTML);
 
 	fclose(fHTML);
@@ -423,10 +410,7 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime)
 	sprintf(tmp, "Tarif Normal=%f euros Jour/nuit=%f euros", G_tarifNormal, G_tarifJourNuit);
 	fputs(tmp, fHTML);
 
-    if (G_Cumul == -1)
-    	n = sprintf(tmp, "ERREUR LECTURE ENVOY<br>\r\n");
-    else
-    	n = sprintf(tmp, "Puissance=%d W - Cumul=%d kWh - Production globale=%d kWh<br>\r\n", G_Puissance, G_Cumul, G_globalProdEDF/3600);
+    	n = sprintf(tmp, "Puissance=%d W (Reset=%u)  Pconso=%d W Pfournie=%d W - Production globale=%d kWh<br>\r\n", G_Puissance, G_resetGlobalWattmetreSolaire, G_pAppEDF, G_prodEDF, G_globalProdEDF/3600);
 	fputs(tmp, fHTML);
 	n = sprintf(tmp, "Journalier=%d Wh Hier=%d Wh Annuel=%d kWh (An n-1=%d kWh)  soit <a>%d km</a><br>", G_PuissanceTotalJour/3600, G_PuissanceTotalJourAvant/3600, G_PuissanceTotalAnnee/3600000, G_PuissanceTotalAnneeAvant/3600000,
 			G_PuissanceTotalAnnee/36000/14);
@@ -835,6 +819,115 @@ void GetESP(void)
     return;
 }
 
+int readWattmetre(int device)
+{
+    char *host1 =        IP_ADDRESS_ESP_WATT_SOLAIRE;
+    char *host;
+    char *p;
+    int portno =        80;
+    char *message = "GET /readPower HTTP/1.0\r\n\r\n";
+    int i, x;
+    struct hostent *server;
+    struct sockaddr_in serv_addr;
+    int sockfd, bytes, sent, received, total;
+    int puissance;
+
+    if (device == 0)
+        host = host1;
+
+    /* create the socket */
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) 
+    {
+        printf("Cannot create socket in readWattmetre\n");
+        return -1;
+    }
+
+    //x = fcntl(sockfd, F_GETFL, 0);
+    //fcntl(sockfd, F_SETFL, x | O_NONBLOCK);
+
+    /* lookup the ip address */
+    server = gethostbyname(host);
+    if (server == NULL)
+    {
+    	close(sockfd);
+        printf("getHostByName failed with %s\n", host);
+    	return -1;
+    }
+
+    /* fill in the structure */
+    memset(&serv_addr,0,sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(portno);
+    memcpy(&serv_addr.sin_addr.s_addr,server->h_addr,server->h_length);
+
+    /* connect the socket */
+    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
+    {
+    	close(sockfd);
+        printf("Cannot connect to Wattmetre : %s\n", host);
+        return -1;
+    }
+
+    /* send the request */
+    total = strlen(message);
+    sent = 0;
+    do {
+        bytes = write(sockfd,message+sent,total-sent);
+        if (bytes < 0)
+            return -1;
+        if (bytes == 0)
+            break;
+        sent+=bytes;
+    } while (sent < total);
+
+    //printf("logSol: connect OK - %d bytes sent\n", sent);
+
+    /* Wait for data with timeout */
+    struct pollfd fds;
+    fds.fd = sockfd;
+    fds.events = POLLIN;
+    fds.revents = 0;
+
+    if (poll(&fds, 1, 1500) <= 0)
+    {
+    	printf("Timeout on poll socket or poll error\r\n");
+    	close(sockfd);
+    	return -1;
+    }
+
+    /* receive the response */
+    memset(response,0,sizeof(response));
+    total = sizeof(response)-1;
+    received = 0;
+    do {
+        bytes = read(sockfd,response+received,total-received);
+        if (bytes < 0)
+            return -1;
+        if (bytes == 0)
+            break;
+        received+=bytes;
+    } while (received < total);
+    response[received] = 0;
+    //printf("logSol: connect OK - %d bytes received\n", received);
+
+    /* close the socket */
+    close(sockfd);
+
+    /* process response */
+    //printf("Response:\n%s\n",response);
+
+    if ((p = readUntilTag(response, "<body>")) == NULL)
+            {
+            return -1;
+            }
+    puissance = atoi(p);
+
+    p = readUntilTag(response, "ResetCounter= ");
+    G_resetCounter = atoi(p);
+    return puissance; // return Power Value
+}
+
 void setESPRelay(int channel, int value)
 {
 	   char tmp[256];
@@ -1057,6 +1150,8 @@ int main(int argc, char **argv)
 	int G_Relais_1 = 0;
 	
 	int start=1;
+        G_resetGlobalWattmetreSolaire = 0;
+        G_Puissance = 0;
 	G_PuissanceTotalJourAvant = 120*3600;
 	G_PuissanceTotalAnnee = 67000*3600;
 	G_PuissanceTotalJour = 0;
@@ -1095,22 +1190,27 @@ int main(int argc, char **argv)
 		{
 		ret = getData(fd, &s);
 		
+		i = readWattmetre(0);
+		if (i == -1)
+                    {
+		        log_printf(" Puiss. Inst=%d (ERROR - last value used)\n", G_Puissance);
+			}
+		else
+			{
+                        G_Puissance = i;
+			log_printf(" Puiss. Inst=%d ResetCounter=%d\n", G_Puissance, G_resetCounter);
+                        if (G_resetCounter < G_lastResetCounter && G_lastResetCounter != 0)
+                            G_resetGlobalWattmetreSolaire++;
+   			G_lastResetCounter = G_resetCounter;
+		        }
 		if (count == 20)
 			{
 			tabHour[nCurrentTabHourIndex] = s;
 			if (countEnvoy == 2)
 			{
-				if (GetEnvoy(&G_Cumul, &G_Puissance) == -1)
-				{
-					G_Cumul = -1;
-					log_printf(" Puiss. Inst=%d Cumul=%d (ERROR - last value used)\n", G_Puissance, G_Cumul);
-				}
-				else
-				{
-					log_printf(" Puiss. Inst=%d Cumul=%d\n", G_Puissance, G_Cumul);
-				}
 				countEnvoy = 0;
 				GetESP();
+			        log_printf(" Consommation=%d\n", G_pAppEDF);
 				if (G_compteurEDF != -1)
 				{
 					genHtmlDomoticzPower(DOMOTICZ_INDEX_CONSO_EDF, G_pAppEDF, G_compteurEDF);
@@ -1119,25 +1219,25 @@ int main(int argc, char **argv)
 						G_globalProdEDF += (G_prodEDF / 60);
 						genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, G_prodEDF, G_globalProdEDF);
 						log_printf("Compteur : %d   Puissance produite : %d\n", G_compteurEDF, G_prodEDF);
-						if (G_Puissance > 500 && G_pAppEDF == 0 && G_Relais_1 == 0)
-							{
-							log_printf("Declenchement du Relais 1");
-							G_Relais_1 = 1;
-							setESPRelay(1, 1);
-							genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
-							}
 						}
 					else
 						{
 						genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, 0, G_globalProdEDF);
 						log_printf("Compteur : %d   Puissance consommee : %d\n", G_compteurEDF, G_pAppEDF);
-						if (G_Relais_1 == 1 && G_pAppEDF > 180)
-							{
-							log_printf("Arret du Relais 1");
-							G_Relais_1 = 0;
-							setESPRelay(1, 0);
-							genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-							}
+						}
+					if (G_Puissance > 500 && G_pAppEDF == 0 && G_Relais_1 == 0)
+						{
+						log_printf("Declenchement du Relais 1\n");
+						G_Relais_1 = 1;
+						setESPRelay(1, 1);
+						genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
+						}
+                                         else if (G_Relais_1 == 1 && G_pAppEDF > 180)
+						{
+						log_printf("Arret du Relais 1\n");
+						G_Relais_1 = 0;
+						setESPRelay(1, 0);
+						genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
 						}
 #if 0
 					if (G_Relais_1 == 2)
@@ -1157,11 +1257,8 @@ int main(int argc, char **argv)
 #endif
 				}
 			}
-			else
-			{
-				log_printf(" Puiss. Inst=%d Cumul=%d (old values)\n", G_Puissance, G_Cumul);
-				countEnvoy++;
-			}
+                        else
+                            countEnvoy++;
 			tabPuissance[nCurrentTabHourIndex] = G_Puissance;
 
 			nCurrentTabHourIndex++;
@@ -1169,8 +1266,6 @@ int main(int argc, char **argv)
 				nCurrentTabHourIndex = 0;
 			count = 0;
 			}
-		else
-			log_printf(" Puiss. Inst=%d Cumul=%d (old values)\n", G_Puissance, G_Cumul);
 
 		count += PERIODE_RELEVE;
 
@@ -1220,7 +1315,7 @@ int main(int argc, char **argv)
 			}
 		pTime = localtime((time_t *)&clock.tv_sec);
 
-		updateTarif(pTime);
+		//updateTarif(pTime);
 
 		// Moyenner la valeur sur la duree
 		if (pTime->tm_hour >= 7 && pTime->tm_hour < 23 )
@@ -1424,7 +1519,7 @@ void loadData(void)
 		if (st->TpanneauxSolaires == 255)
 			st->TpanneauxSolaires = 0;
 		pTime = localtime((time_t *)&st->tm);
-		log_printf("[%d] %d %d:%d:%d %c %d %d %d %d dTC=%d dTP=%d puissance=%d\n", i,
+		printf("[%d] %d %d:%d:%d %c %d %d %d %d dTC=%d dTP=%d puissance=%d\n", i,
 			pTime->tm_mday, pTime->tm_hour, pTime->tm_min, pTime->tm_sec, st->mode, st->Tcuve, st->TpanneauxSolaires, st->Tchaudiere, st->pompe, st->dtChaudiere, st->dtPrechauffage, st->puissance);
 		}
 
