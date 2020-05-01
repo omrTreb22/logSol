@@ -5,6 +5,7 @@
 // 19/12/2017 : 5.0 - Recuperation puissance Envoy        //
 // 08/02/2018 : 5.1 - Interface Domoticz                  //
 // 28/10/2018 : 5.2 - Comparaison calcul Tarif jour/nuit  //
+// 30/11/2019 : 6.0 - Thread UDP pour wattmetre           //
 //--------------------------------------------------------//
 
 #include <stdio.h>
@@ -17,6 +18,7 @@
 #include <sys/time.h>
 #include <poll.h>
 #include <stdarg.h>
+#include <pthread.h>
 
 #include "logSol.h"
 
@@ -36,6 +38,7 @@ unsigned long G_resetCounter = 0;
 unsigned long G_lastResetCounter = 0;
 int G_resetGlobalWattmetreSolaire;
 int G_Puissance;
+int G_Puissance_PZEM_EDF;
 long G_PuissanceTotalJour;
 unsigned long G_PuissanceTotalAnnee;
 long G_PuissanceTotalJourAvant;
@@ -50,6 +53,7 @@ int G_logFileIndex = 0;
 int G_lastCompteurEDF = 0;
 float G_tarifNormal = 0.0;
 float G_tarifJourNuit = 0.0;
+int g_sockUDPRelay;
 
 #define TARIF_NORMAL   0.1410   // Tarif normal en centime euros par kWh
 #define TARIF_JOUR     0.1672
@@ -70,6 +74,8 @@ char listData[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345678
 int  mday_month[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 char *mois[12] = { "Jan", "Fev", "Mar", "Avr", "Mai", "Jui", "Jul", "Aou", "Sep", "Oct", "Nov", "Dec" };
 
+#define CONV(a) ((a >= 62) ? listData[61] : (a < 0) ? listData[0] : listData[a])
+
 int tabPuissance[LOG_DURATION];
 
 // Declaration des fonctions
@@ -82,6 +88,124 @@ void loadData(void);
 void signal_function(int param)
 {
 	leave = 1;
+}
+
+void *UDP_monitoring_thread(void *param)
+{
+    int sockfd; 
+    char buffer[200]; 
+    struct sockaddr_in servaddr, cliaddr; 
+    char *s1,*s2,*s3;
+      
+    // Creating socket file descriptor 
+    if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) { 
+        perror("socket creation failed"); 
+        return; 
+    } 
+      
+    memset(&servaddr, 0, sizeof(servaddr)); 
+      
+    // Filling server information 
+    servaddr.sin_family    = AF_INET; // IPv4 
+    servaddr.sin_addr.s_addr = INADDR_ANY; 
+    servaddr.sin_port = htons(PORT_UDP); 
+      
+    // Bind the socket with the server address 
+    if (bind(sockfd, (const struct sockaddr *)&servaddr,  
+            sizeof(servaddr)) < 0 ) 
+    { 
+        perror("bind failed"); 
+        return; 
+    } 
+      
+    int noError = 1;
+    while (noError)
+        {
+        int len, n; 
+        n = recvfrom(sockfd, (char *)buffer, 200,  
+                MSG_WAITALL, ( struct sockaddr *) &cliaddr, 
+                &len); 
+        buffer[n] = '\0'; 
+
+        //printf("[UDP Thread] Receive from %s\n", buffer);
+
+        if (strncmp(buffer, "PZEM_SOLAIRE", 12) == 0)
+            {
+            s1 = strchr(buffer, ' ');
+            if (s1)
+                {
+                int p = atoi(++s1);
+                if (p != -1)
+                    G_Puissance = p;
+                else
+                    printf("[UDP Thread] Read error : previous value reused\n"); 
+                s2 = strchr(s1, ' ');
+                if (s2 && (s3=strchr(++s2, ' ')))
+                    {
+                    int sequence = atoi(++s3);
+                    if (sequence < G_lastResetCounter && G_lastResetCounter != 0)
+                        G_resetGlobalWattmetreSolaire++;
+                    G_lastResetCounter = sequence;
+                    }//if (s2)
+                }//if (s1)
+            }//if (PZEM_SOLAIRE)
+        else if (strncmp(buffer, "PZEM_EDF", 8) == 0)
+            {
+            s1 = strchr(buffer, ' ');
+            if (s1)
+                {
+                int p = atoi(++s1);
+                if (p != -1)
+                    {
+                    G_Puissance_PZEM_EDF = p;
+                    //printf("[UDP Thread] Receive Puissance PZEM EDF=%d\n", G_Puissance_PZEM_EDF);
+                    }
+                else
+                    printf("[UDP Thread] Read error : previous value reused\n"); 
+                s2 = strchr(s1, ' ');
+                if (s2 && (s3=strchr(++s2, ' ')))
+                    {
+                    int sequence = atoi(++s3);
+                    //printf("[UDP Thread] Sequence=%d\n", sequence);
+                    }//if (s2)
+                }//if (s1)
+            }//if (PZEM_EDF)
+        else if (strncmp(buffer, "TELEINFO", 8) == 0)
+            {
+            s1 = strchr(buffer, ' ');
+            if (s1)
+                {
+                G_compteurEDF = atoi(++s1);
+                if (G_compteurEDF == -1)
+                    printf("[UDP Thread] Read error : previous value reused\n"); 
+                s1 = strchr(s1, ' ');
+                if (s1)
+                    {
+                    int n = atoi(++s1);
+                    }//if (s1)
+                s1 = strchr(s1, ' ');
+                if (s1)
+                    {
+                    G_pAppEDF = atoi(++s1);
+                    if (G_pAppEDF == 0)
+                        G_prodEDF = G_Puissance_PZEM_EDF;
+                    else
+                       {
+                       G_pAppEDF = G_Puissance_PZEM_EDF;
+                       G_prodEDF = 0;
+                       }
+                    }//if (s1)
+                s1 = strchr(s1, ' ');
+                if (s1)
+                    {
+                    int n = atoi(++s1);
+                    }//if (s2)
+                }//if (s1)
+            }//if (TELEINFO)
+        else
+            printf("[UDP Thread] Data not recognized : %s", buffer);
+        }//while (noError)
+   return;
 }
 
 //
@@ -253,45 +377,32 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 	n+= sprintf(&tmp[n], "<img src=\"http://chart.apis.google.com/chart?cht=lc&chd=s:");
 	for (i = 1 ; i < LOG_DURATION ; i++)
 		{
-		index = (nCurrentTabDayIndex + i);
+	        index = (nCurrentTabDayIndex + i);
 		if (index >= LOG_DURATION)
 			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].TpanneauxSolaires*SCALE_FACTOR]);
-			}
+		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].TpanneauxSolaires*SCALE_FACTOR));
 		}
 	for (i = 1 ; i < LOG_DURATION ; i++)
 		{
 		index = (nCurrentTabDayIndex + i);
 		if (index >= LOG_DURATION)
 			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].Tcuve*SCALE_FACTOR]);
-			}
+		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].Tcuve*SCALE_FACTOR));
 		}
 	for (i = 1 ; i < LOG_DURATION ; i++)
 		{
 		index = (nCurrentTabDayIndex + i);
 		if (index >= LOG_DURATION)
 			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].Tchaudiere*SCALE_FACTOR]);
-			}
+		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].Tchaudiere*SCALE_FACTOR));
 		}
 	for (i = 1 ; i < LOG_DURATION ; i++)
 		{
 		index = (nCurrentTabDayIndex + i);
 		if (index >= LOG_DURATION)
 			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabDay[index].pompe*SCALE_FACTOR]);
-			}
+		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].pompe*SCALE_FACTOR));
 		}
-
 
 	n+= sprintf(&tmp[n], "&chs=900x200&chco=FF0000,0000FF,F0F000,00FF00&chdl=T.P.Solaires|T.cuve|T.chaudiere|Pompe&chg=0,13\"></TH></TR>");
 	fputs(tmp, fHTML);	
@@ -819,123 +930,114 @@ void GetESP(void)
     return;
 }
 
-int readWattmetre(int device)
+void initESPRelay()
 {
-    char *host1 =        IP_ADDRESS_ESP_WATT_SOLAIRE;
-    char *host;
-    char *p;
-    int portno =        80;
-    char *message = "GET /readPower HTTP/1.0\r\n\r\n";
-    int i, x;
-    struct hostent *server;
-    struct sockaddr_in serv_addr;
-    int sockfd, bytes, sent, received, total;
-    int puissance;
-
-    if (device == 0)
-        host = host1;
-
-    /* create the socket */
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) 
-    {
-        printf("Cannot create socket in readWattmetre\n");
-        return -1;
-    }
-
-    //x = fcntl(sockfd, F_GETFL, 0);
-    //fcntl(sockfd, F_SETFL, x | O_NONBLOCK);
-
-    /* lookup the ip address */
-    server = gethostbyname(host);
-    if (server == NULL)
-    {
-    	close(sockfd);
-        printf("getHostByName failed with %s\n", host);
-    	return -1;
-    }
-
-    /* fill in the structure */
-    memset(&serv_addr,0,sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(portno);
-    memcpy(&serv_addr.sin_addr.s_addr,server->h_addr,server->h_length);
-
-    /* connect the socket */
-    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
-    {
-    	close(sockfd);
-        printf("Cannot connect to Wattmetre : %s\n", host);
-        return -1;
-    }
-
-    /* send the request */
-    total = strlen(message);
-    sent = 0;
-    do {
-        bytes = write(sockfd,message+sent,total-sent);
-        if (bytes < 0)
-            return -1;
-        if (bytes == 0)
-            break;
-        sent+=bytes;
-    } while (sent < total);
-
-    //printf("logSol: connect OK - %d bytes sent\n", sent);
-
-    /* Wait for data with timeout */
-    struct pollfd fds;
-    fds.fd = sockfd;
-    fds.events = POLLIN;
-    fds.revents = 0;
-
-    if (poll(&fds, 1, 1500) <= 0)
-    {
-    	printf("Timeout on poll socket or poll error\r\n");
-    	close(sockfd);
-    	return -1;
-    }
-
-    /* receive the response */
-    memset(response,0,sizeof(response));
-    total = sizeof(response)-1;
-    received = 0;
-    do {
-        bytes = read(sockfd,response+received,total-received);
-        if (bytes < 0)
-            return -1;
-        if (bytes == 0)
-            break;
-        received+=bytes;
-    } while (received < total);
-    response[received] = 0;
-    //printf("logSol: connect OK - %d bytes received\n", received);
-
-    /* close the socket */
-    close(sockfd);
-
-    /* process response */
-    //printf("Response:\n%s\n",response);
-
-    if ((p = readUntilTag(response, "<body>")) == NULL)
-            {
-            return -1;
-            }
-    puissance = atoi(p);
-
-    p = readUntilTag(response, "ResetCounter= ");
-    G_resetCounter = atoi(p);
-    return puissance; // return Power Value
+    // création d'une socket UDP
+    g_sockUDPRelay = socket(AF_INET, SOCK_DGRAM, 0); 
+    if (g_sockUDPRelay == -1) 
+        {
+        perror("erreur création socket"); 
+        }
 }
 
-void setESPRelay(int channel, int value)
+int setESPRelay(int state, int value)
 {
-	   char tmp[256];
+    char tmp[6];
+    int lg;
+    struct sockaddr_in addr_serveur;
+    int nb_octets;
 
-	    sprintf(tmp, "GET /setRelais_Ch%d_%s HTTP/1.0\r\n\r\n", channel,
-	    		(value==0) ? "Off" : "On");
-	    genHtmlESPRelay(tmp);
+    tmp[0] = 'R';
+    tmp[1] = 'E';
+    tmp[2] = 'L';
+    tmp[3] = 'A';
+    tmp[4] = state;
+    tmp[5] = value;
+           
+    //printf("setESPRelay : Envoie de state=%d value=%d\n", state, value);
+
+    struct hostent *hostinfo = NULL;
+    hostinfo = gethostbyname(IP_ADDRESS_ESP_RELAY); /* on récupère les informations de l'hôte auquel on veut se connecter */
+    if (hostinfo == NULL) /* l'hôte n'existe pas */
+        {
+        fprintf (stderr, "Unknown host %s.\n", IP_ADDRESS_ESP_RELAY);
+        return 0;
+        }
+
+    memset(&addr_serveur, 0, sizeof(struct sockaddr_in)); 
+    addr_serveur.sin_family = AF_INET; 
+    addr_serveur.sin_port = htons(UDP_PORT_RELAY); 
+    memcpy(&addr_serveur.sin_addr.s_addr, hostinfo->h_addr, hostinfo->h_length);
+    lg = sizeof(struct sockaddr_in);
+    nb_octets = sendto(g_sockUDPRelay, tmp, 6, 0, (struct sockaddr*)&addr_serveur, lg);
+    if (nb_octets == -1) 
+        {
+        perror("erreur envoi message"); 
+        return 0;
+        }
+    return value;
 }
+#if 0
+int setESPRelay(int state, int value)
+{
+    char tmp[6];
+    int lg;
+    struct sockaddr_in addr_serveur;
+    int nb_octets;
+    int code;
+    int power = 0;
+
+    // Conversion de la valeur selon la formule W = code x 1.72 + 570  (W=code x DIVIDER_POWER_REMOTE_PLUG + THRESHOLD_POWER_REMOTE_PLUG)
+    // code = (W - 570)*100/172
+    if (value > 1000)
+        value = 1000;
+    if (state == 1 && value <= THRESHOLD_POWER_REMOTE_PLUG)
+        {
+        state = 0;
+        code = 0;
+        power = 0;
+        }
+    else if (state)
+        {
+        if (value > THRESHOLD_POWER_REMOTE_PLUG + THRESHOLD_POWER_REMOTE_PLUG/2)
+            code = (value - THRESHOLD_POWER_REMOTE_PLUG)*100/DIVIDER_POWER_REMOTE_PLUG;
+        else
+            code = 0;
+        power = (code * DIVIDER_POWER_REMOTE_PLUG/100) + THRESHOLD_POWER_REMOTE_PLUG;
+        }
+    else
+        code = 0;
+    tmp[0] = 'R';
+    tmp[1] = 'E';
+    tmp[2] = 'L';
+    tmp[3] = 'A';
+    tmp[4] = state;
+    tmp[5] = code;
+           
+    printf("setESPRelay : Envoie de state=%d code=%d (power=%d)\n", state, code, power);
+
+    struct hostent *hostinfo = NULL;
+    hostinfo = gethostbyname(IP_ADDRESS_ESP_RELAY); /* on récupère les informations de l'hôte auquel on veut se connecter */
+    if (hostinfo == NULL) /* l'hôte n'existe pas */
+        {
+        fprintf (stderr, "Unknown host %s.\n", IP_ADDRESS_ESP_RELAY);
+        return 0;
+        }
+
+    memset(&addr_serveur, 0, sizeof(struct sockaddr_in)); 
+    addr_serveur.sin_family = AF_INET; 
+    addr_serveur.sin_port = htons(UDP_PORT_RELAY); 
+    memcpy(&addr_serveur.sin_addr.s_addr, hostinfo->h_addr, hostinfo->h_length);
+    lg = sizeof(struct sockaddr_in);
+    nb_octets = sendto(g_sockUDPRelay, tmp, 6, 0, (struct sockaddr*)&addr_serveur, lg);
+    if (nb_octets == -1) 
+        {
+        perror("erreur envoi message"); 
+        return 0;
+        }
+    return power;
+}
+#endif
 
 void genHtmlESPRelay(char *tmp)
 {
@@ -1131,9 +1233,9 @@ int main(int argc, char **argv)
 	char c;
 	int ret;
 	int count;
-	int countEnvoy;
 	int countDay;
 	int compteur;
+        int countRelais = 0;
 	struct sInfo s;
 	struct timeval clock;
 	struct tm *pTime;
@@ -1148,10 +1250,16 @@ int main(int argc, char **argv)
 	int dczGelPrevious = -1;
 	int dczKmZoePrevious = -1;
 	int G_Relais_1 = 0;
+        pthread_t threadUDP;
+        int lastPower, previousPower;
 	
+        initESPRelay();
+        setESPRelay(0, 0);
+
 	int start=1;
         G_resetGlobalWattmetreSolaire = 0;
         G_Puissance = 0;
+        G_Puissance_PZEM_EDF = 0;
 	G_PuissanceTotalJourAvant = 120*3600;
 	G_PuissanceTotalAnnee = 67000*3600;
 	G_PuissanceTotalJour = 0;
@@ -1180,85 +1288,37 @@ int main(int argc, char **argv)
 	memset(tabDay, 0, sizeof(tabDay));
 	memset(tabCumulMonth, 0, sizeof(tabCumulMonth));
 	memset(tabHistoMonth, 0, sizeof(tabHistoMonth));
+        printf("Loading Data...\n");
+
+
 	loadData();
 
-	count = 20;
-	countEnvoy = 2;
+        printf("Start thread UDP\n");
+
+        ret = pthread_create(&threadUDP, NULL, UDP_monitoring_thread, NULL);
+        if (ret)
+            printf("Cannot create thread UDP_monitoring_thread\n");
+
+	count = 60;
 	countDay = 0;
 	ret = 0;
 	while (ret == 0 && leave == 0) 
 		{
 		ret = getData(fd, &s);
-		
-		i = readWattmetre(0);
-		if (i == -1)
-                    {
-		        log_printf(" Puiss. Inst=%d (ERROR - last value used)\n", G_Puissance);
-			}
-		else
-			{
-                        G_Puissance = i;
-			log_printf(" Puiss. Inst=%d ResetCounter=%d\n", G_Puissance, G_resetCounter);
-                        if (G_resetCounter < G_lastResetCounter && G_lastResetCounter != 0)
-                            G_resetGlobalWattmetreSolaire++;
-   			G_lastResetCounter = G_resetCounter;
-		        }
-		if (count == 20)
+		if (count == 60)
 			{
 			tabHour[nCurrentTabHourIndex] = s;
-			if (countEnvoy == 2)
-			{
-				countEnvoy = 0;
-				GetESP();
-			        log_printf(" Consommation=%d\n", G_pAppEDF);
-				if (G_compteurEDF != -1)
+                        if (G_compteurEDF > 0)
+			   genHtmlDomoticzPower(DOMOTICZ_INDEX_CONSO_EDF, G_pAppEDF, G_compteurEDF);
+			if (G_prodEDF != 0)
 				{
-					genHtmlDomoticzPower(DOMOTICZ_INDEX_CONSO_EDF, G_pAppEDF, G_compteurEDF);
-					if (G_prodEDF != 0)
-						{
-						G_globalProdEDF += (G_prodEDF / 60);
-						genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, G_prodEDF, G_globalProdEDF);
-						log_printf("Compteur : %d   Puissance produite : %d\n", G_compteurEDF, G_prodEDF);
-						}
-					else
-						{
-						genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, 0, G_globalProdEDF);
-						log_printf("Compteur : %d   Puissance consommee : %d\n", G_compteurEDF, G_pAppEDF);
-						}
-					if (G_Puissance > 500 && G_pAppEDF == 0 && G_Relais_1 == 0)
-						{
-						log_printf("Declenchement du Relais 1\n");
-						G_Relais_1 = 1;
-						setESPRelay(1, 1);
-						genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
-						}
-                                         else if (G_Relais_1 == 1 && G_pAppEDF > 180)
-						{
-						log_printf("Arret du Relais 1\n");
-						G_Relais_1 = 0;
-						setESPRelay(1, 0);
-						genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-						}
-#if 0
-					if (G_Relais_1 == 2)
-						{
-						log_printf("Arret du Relais 1");
-						G_Relais_1 = 0;
-						setESPRelay(1, 0);
-						genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-						}
-					else
-						{
-						log_printf("Declenchement du Relais 1");
-						G_Relais_1 = 2;
-						setESPRelay(1, 1);
-						genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
-						}
-#endif
+				G_globalProdEDF += (G_prodEDF / 60);
+				genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, G_prodEDF, G_globalProdEDF);
 				}
-			}
-                        else
-                            countEnvoy++;
+			else
+				{
+				genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, 0, G_globalProdEDF);
+				}
 			tabPuissance[nCurrentTabHourIndex] = G_Puissance;
 
 			nCurrentTabHourIndex++;
@@ -1267,6 +1327,64 @@ int main(int argc, char **argv)
 			count = 0;
 			}
 
+                // Gestion de la prise commandee
+		if (G_prodEDF > THRESHOLD_POWER_REMOTE_PLUG && G_Relais_1 == 0)
+			{
+			G_Relais_1 = 1;
+			lastPower = setESPRelay(1, 0);
+			//printf("Declenchement du Relais 1 avec value 0 (ProdEDF=%d)\n", lastPower, G_prodEDF);
+			genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
+                        countRelais = 0;
+			}
+                 else if (G_Relais_1 == 1)
+			{
+                        if (countRelais < 1)
+                            countRelais++;
+                        else if (G_pAppEDF >= 100)
+                            {
+			    //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
+                            lastPower = setESPRelay(0, 0);
+			    G_Relais_1 = 0;
+			    genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
+                            }
+                        else
+                            {
+                            previousPower = lastPower;
+                            if (G_prodEDF > 300)
+                                lastPower += 40;
+                            else if (G_prodEDF > 200)
+                                lastPower += 20;
+                            else if (G_prodEDF > 120)
+                                lastPower += 10;
+                            else if (G_prodEDF > 50)
+				lastPower++;
+                            if (G_prodEDF == 0)
+				lastPower  = (lastPower < 40) ? 0 : lastPower -  40;
+                            else if (G_prodEDF < 10)
+				lastPower =  (lastPower < 20) ? 0 : lastPower - 20;
+                            else if (G_prodEDF < 30)
+				lastPower -= 10;
+                            else if (G_prodEDF < 40)
+				lastPower--;
+                            if (lastPower > 255)
+                                lastPower = 255;
+                            if (lastPower < 0)
+                               {
+			       lastPower = setESPRelay(0, 0);
+			       G_Relais_1 = 0;
+			       genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
+			       //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
+                               }
+                            else
+                               {
+			       lastPower = setESPRelay(1, lastPower);
+                               countRelais = 0;
+			       //printf("Reprogrammation du Relais 1 : previous=%d new=%d (prodEDF=%d)\n", previousPower, lastPower, G_prodEDF);
+                               }
+                            }
+			}
+
+		printf(" Puiss. Solaire Inst=%d CompteurEDF=%d PuissanceAppEDF=%d PuissanceProdEDF=%d prise=%d (%d W)\n", G_Puissance, G_compteurEDF, G_pAppEDF, G_prodEDF, (G_Relais_1 == 1) ? lastPower : -1, (G_Relais_1 == 1) ? (lastPower*DIVIDER_POWER_REMOTE_PLUG/100)+THRESHOLD_POWER_REMOTE_PLUG:-1);
 		count += PERIODE_RELEVE;
 
 		if (s.TpanneauxSolaires <= 5 && s.pompe != 0)
@@ -1421,6 +1539,7 @@ int main(int argc, char **argv)
 		
 	printf("Fermeture du port - Sortie du programme\n");
 	close(fd);
+        close(g_sockUDPRelay);
 	return 0;
 }
 
@@ -1775,7 +1894,7 @@ nextLine:
 		return;
 		}
 	s->tm = clock.tv_sec;
-	log_printf(" (%ds) %d %02d:%02d:%02d %c %d %d %d %d\n", (int)s->tm,
+	printf(" (%ds) %d %02d:%02d:%02d %c %d %d %d %d ", (int)s->tm,
 		jour, heure, minute, seconde, s->mode, s->Tcuve, s->TpanneauxSolaires, s->Tchaudiere, s->pompe);
 
 

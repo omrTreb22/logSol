@@ -27,7 +27,7 @@
 // 20/10/2013 : Suppression des liens vers bib22.dyndns.org
 // 30.10/2016 : 4.0 : Version avec data pour smartphones
 
-#define VERSION "5.0"
+#define VERSION "6.0"
 
 
 
@@ -48,6 +48,9 @@
 #define HTML_SMARTPHONE_FILE "/var/www/smartData.html"
 #define PERIOD_STAT  900
 #define PERIODE_RELEVE  5
+#define UDP_PORT_RELAY                5006
+#define THRESHOLD_POWER_REMOTE_PLUG   300
+#define DIVIDER_POWER_REMOTE_PLUG     172
 
 // Index for Domoticz
 #define DOMOTICZ_INDEX_PANNEAUX_SOLAIRES   1
@@ -64,9 +67,10 @@
 
 #define IP_ADDRESS_ESP_WATT_SOLAIRE        "192.168.1.93"
 #define IP_ADDRESS_ESP_EDF                 "192.168.1.91"
-#define IP_ADDRESS_ESP_RELAY               "192.168.1.89"
+#define IP_ADDRESS_ESP_RELAY               "192.168.1.66"
 #define IP_ADDRESS_ENVOY                   "192.168.1.86"
 #define IP_ADDRESS_DOMOTICZ                "192.168.1.77"
+#define PORT_UDP                           5005
 
 // Declaration des types
 typedef void (*sig_t) (int);
