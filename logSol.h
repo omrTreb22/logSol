@@ -114,7 +114,7 @@ struct sInfoHistoMonth
 
 // Declaration des variables globales
 extern struct sInfoHistoMonth tabHistoMonth[LOG_MONTH_DURATION]; // Historique sur 60 mois
-extern char tmp[4000];
+extern char tmp[8000];
 extern char listData[];
 extern int  mday_month[12];
 extern char *mois[12];

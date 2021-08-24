@@ -19,6 +19,8 @@
 #include <poll.h>
 #include <stdarg.h>
 #include <pthread.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "logSol.h"
 
@@ -51,8 +53,6 @@ int G_prodEDF;
 FILE *G_fdLog;
 int G_logFileIndex = 0;
 int G_lastCompteurEDF = 0;
-float G_tarifNormal = 0.0;
-float G_tarifJourNuit = 0.0;
 int g_sockUDPRelay;
 
 #define TARIF_NORMAL   0.1410   // Tarif normal en centime euros par kWh
@@ -69,7 +69,7 @@ struct sInfoCumulMonth tabCumulMonth[LOG_MONTH_DURATION];
 int nCurrentTabHourIndex;
 int nCurrentTabDayIndex;
 struct sInfoHistoMonth tabHistoMonth[LOG_MONTH_DURATION]; // Historique sur 60 mois
-char tmp[4000];
+char tmp[8000];
 char listData[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 int  mday_month[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 char *mois[12] = { "Jan", "Fev", "Mar", "Avr", "Mai", "Jui", "Jul", "Aou", "Sep", "Oct", "Nov", "Dec" };
@@ -82,6 +82,7 @@ int tabPuissance[LOG_DURATION];
 int openSerialPort(void);
 void saveData(void);
 void loadData(void);
+int getData(int fd, struct sInfo *s);
 
 
 
@@ -100,7 +101,7 @@ void *UDP_monitoring_thread(void *param)
     // Creating socket file descriptor 
     if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) { 
         perror("socket creation failed"); 
-        return; 
+        return 0; 
     } 
       
     memset(&servaddr, 0, sizeof(servaddr)); 
@@ -115,7 +116,7 @@ void *UDP_monitoring_thread(void *param)
             sizeof(servaddr)) < 0 ) 
     { 
         perror("bind failed"); 
-        return; 
+        return 0; 
     } 
       
     int noError = 1;
@@ -205,7 +206,7 @@ void *UDP_monitoring_thread(void *param)
         else
             printf("[UDP Thread] Data not recognized : %s", buffer);
         }//while (noError)
-   return;
+   return 0;
 }
 
 //
@@ -469,8 +470,6 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 	fputs(tmp, fHTML);
 	n = sprintf(tmp, "Duree protection Gel : %d s ", G_DureeProtectionGel);
 	fputs(tmp, fHTML);
-	n = sprintf(tmp, "Tarif Normal=%f euros Jour/nuit=%f euros", G_tarifNormal, G_tarifJourNuit);
-	fputs(tmp, fHTML);
 	n = sprintf(tmp, "</CENTER></body></html>");
 	fputs(tmp, fHTML);
 
@@ -479,10 +478,18 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 	return 0;
 }
 
+void addKeyword(FILE *fd, char *word, int value)
+{
+    char tmp[128];
+  
+    sprintf(tmp, "%s %d <br>\r\n", word, value);
+    fputs(tmp, fd);
+}
+
 //
 // Function genereHTML
 //
-int genDataSmartphone(struct sInfo *s, struct tm *pTime)
+int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
 {
 	FILE *fHTML;
 	int n = 0;
@@ -496,7 +503,7 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime)
 	fHTML = fopen(HTML_SMARTPHONE_FILE, "w");
 	if (fHTML < 0)
 		{
-		printf("-- Error : cannot open %s\n", HTML_FILE);
+		printf("-- Error : cannot open %s\n", HTML_SMARTPHONE_FILE);
 		return 0;
 		}
 		
@@ -508,29 +515,20 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime)
 	fputs("  ga('create', 'UA-44232486-1', 'lvam.dyndns.org');\r\n", fHTML);
 	fputs("  ga('send', 'pageview');\r\n", fHTML);
 	fputs("</script>\r\n", fHTML);
-	sprintf(tmp, "TEMPERATURE_PANNEAUX = %d <br>\r\n", s->TpanneauxSolaires);
-	fputs(tmp, fHTML);
-	sprintf(tmp, "TEMPERATURE_CUVE = %d <br>\r\n", s->Tcuve);
-	fputs(tmp, fHTML);
-	sprintf(tmp, "TEMPERATURE_EAU_CHAUDE = %d <br>\r\n", s->Tchaudiere);
-	fputs(tmp, fHTML);
-	sprintf(tmp, "ETAT_CIRCULATEUR = %d <br>\r\n", s->pompe);
-	fputs(tmp, fHTML);
-	sprintf(tmp, "Duree protection Gel = %d <br>\r\n", G_DureeProtectionGel);
-	fputs(tmp, fHTML);
-	sprintf(tmp, "Tarif Normal=%f euros Jour/nuit=%f euros", G_tarifNormal, G_tarifJourNuit);
-	fputs(tmp, fHTML);
-
-    	n = sprintf(tmp, "Puissance=%d W (Reset=%u)  Pconso=%d W Pfournie=%d W - Production globale=%d kWh<br>\r\n", G_Puissance, G_resetGlobalWattmetreSolaire, G_pAppEDF, G_prodEDF, G_globalProdEDF/3600);
-	fputs(tmp, fHTML);
-	n = sprintf(tmp, "Journalier=%d Wh Hier=%d Wh Annuel=%d kWh (An n-1=%d kWh)  soit <a>%d km</a><br>", G_PuissanceTotalJour/3600, G_PuissanceTotalJourAvant/3600, G_PuissanceTotalAnnee/3600000, G_PuissanceTotalAnneeAvant/3600000,
-			G_PuissanceTotalAnnee/36000/14);
-	fputs(tmp, fHTML);
+        addKeyword(fHTML, "@TEMPERATURE_PANNEAUX",   s->TpanneauxSolaires);
+        addKeyword(fHTML, "@TEMPERATURE_CUVE",       s->Tcuve);
+        addKeyword(fHTML, "@TEMPERATURE_EAU_CHAUDE", s->Tchaudiere);
+        addKeyword(fHTML, "@ETAT_CIRCULATEUR",       s->pompe);
+        addKeyword(fHTML, "@DUREE_PROTECTION_GEL",   G_DureeProtectionGel);
+        addKeyword(fHTML, "@PUISSANCE_SOLAIRE",      G_Puissance);
+        addKeyword(fHTML, "@PUISSANCE_CONSOMMEE",    G_pAppEDF);
+        addKeyword(fHTML, "@PUISSANCE_INJECTEE",     G_prodEDF);
+        addKeyword(fHTML, "@ETAT_PRISE_CONNECTEE",   relais);
+        addKeyword(fHTML, "@KM_ZOE",                 (G_PuissanceTotalAnnee/36000/14));
+        addKeyword(fHTML, "@INDEX_LINKY",            G_compteurEDF);
 	sprintf(tmp, "<br>Page generee le %d/%d/%d %02d:%02d:%02d LogSol Version %s",
 		pTime->tm_mday, (pTime->tm_mon+1), (pTime->tm_year+1900), pTime->tm_hour, pTime->tm_min, pTime->tm_sec, VERSION);
 	fputs(tmp, fHTML);
-	
-
 	fputs("</body></html>\r\n", fHTML);
 	fclose(fHTML);
 
@@ -564,7 +562,7 @@ void genHtmlDomoticzSwitch(int index, int value)
 void genHtmlDomoticzCommand(char *tmp)
 {
     /* first what are we going to send and where are we going to send it? */
-    int portno =        7879;
+    int portno =        7979;
     char *host =        IP_ADDRESS_DOMOTICZ;
     int i;
 
@@ -1014,7 +1012,7 @@ int setESPRelay(int state, int value)
     tmp[4] = state;
     tmp[5] = code;
            
-    printf("setESPRelay : Envoie de state=%d code=%d (power=%d)\n", state, code, power);
+    //printf("setESPRelay : Envoie de state=%d code=%d (power=%d)\n", state, code, power);
 
     struct hostent *hostinfo = NULL;
     hostinfo = gethostbyname(IP_ADDRESS_ESP_RELAY); /* on récupère les informations de l'hôte auquel on veut se connecter */
@@ -1201,29 +1199,12 @@ void genHtmlWeather()
         received+=bytes;
     } while (received < total);
     response[received] = 0;
-    printf("logSol: Response from weather - %d bytes received : %s\n", received, response);
+    //printf("logSol: Response from weather - %d bytes received : %s\n", received, response);
 
     /* close the socket */
     close(sockfd);
 
     return;
-}
-
-void updateTarif(struct tm *pTime)
-{
-	int d = G_compteurEDF - G_lastCompteurEDF;
-
-	if (G_lastCompteurEDF == 0)
-		{
-		G_lastCompteurEDF = G_compteurEDF;
-		return;
-		}
-	G_lastCompteurEDF = G_compteurEDF;
-	if (pTime->tm_hour >= 7 && pTime->tm_hour < 23)
-		G_tarifJourNuit += (d/1000.0 * TARIF_JOUR);
-	else
-		G_tarifJourNuit += (d/1000.0 * TARIF_NUIT);
-	G_tarifNormal += (d/1000.0 * TARIF_NORMAL);
 }
 
 // Function Main
@@ -1433,8 +1414,6 @@ int main(int argc, char **argv)
 			}
 		pTime = localtime((time_t *)&clock.tv_sec);
 
-		//updateTarif(pTime);
-
 		// Moyenner la valeur sur la duree
 		if (pTime->tm_hour >= 7 && pTime->tm_hour < 23 )
 		{
@@ -1526,7 +1505,7 @@ int main(int argc, char **argv)
         G_PuissanceTotalAnnee += G_Puissance*PERIODE_RELEVE;
 
 		genHTML(&s, pTime);
-		genDataSmartphone(&s, pTime);
+		genDataSmartphone(&s, pTime, (G_Relais_1 ? lastPower : -1));
 		
 		if (pTime->tm_min == 0 && (pTime->tm_hour > 10 && pTime->tm_hour < 21) && pTime->tm_sec < 10)
 			genHTMLHistorique(&s, pTime);
@@ -1891,7 +1870,7 @@ nextLine:
 	if (-1 == gettimeofday(&clock, NULL))
 		{
 		printf("Error : gettimeofday returns -1 - errno=%d\n", errno);
-		return;
+		return 0;
 		}
 	s->tm = clock.tv_sec;
 	printf(" (%ds) %d %02d:%02d:%02d %c %d %d %d %d ", (int)s->tm,
