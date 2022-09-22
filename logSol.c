@@ -54,6 +54,12 @@ FILE *G_fdLog;
 int G_logFileIndex = 0;
 int G_lastCompteurEDF = 0;
 int g_sockUDPRelay;
+long G_AutoConsommation = 0;
+long G_AutoConsommationAvant = 0;
+long G_TotalPuissanceSolaire = 0;
+long G_TotalPuissanceSolaireAvant = 0;
+long G_TotalPuissanceConsommee = 0;
+long G_TotalPuissanceConsommeeAvant = 0;
 
 #define TARIF_NORMAL   0.1410   // Tarif normal en centime euros par kWh
 #define TARIF_JOUR     0.1672
@@ -89,6 +95,16 @@ int getData(int fd, struct sInfo *s);
 void signal_function(int param)
 {
 	leave = 1;
+}
+
+int getPercent(long a, long b)
+{
+	if (b ==0)
+		return 0;
+
+	float ra = (float)a;
+	float rb = (float)b;
+	return (int)(ra*100.0/rb);
 }
 
 void *UDP_monitoring_thread(void *param)
@@ -225,6 +241,7 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 	int current, cumul;
 	int max;
 	int temp;
+	int r1, r2;
 	
 	fHTML = fopen(HTML_FILE, "w");
 	if (fHTML < 0)
@@ -468,7 +485,15 @@ int genHTML(struct sInfo *s, struct tm *pTime)
 	n = sprintf(tmp, " Journalier=%d Wh Hier=%d Wh Annuel=%d kWh (An n-1=%d kWh)  soit <a>%d km</a><br>", G_PuissanceTotalJour/3600, G_PuissanceTotalJourAvant/3600, G_PuissanceTotalAnnee/3600000, G_PuissanceTotalAnneeAvant/3600000,
 			G_PuissanceTotalAnnee/36000/14);
 	fputs(tmp, fHTML);
-	n = sprintf(tmp, "Duree protection Gel : %d s ", G_DureeProtectionGel);
+	r1 = getPercent(G_AutoConsommation, G_TotalPuissanceSolaire);
+	r2 = getPercent(G_AutoConsommation, G_TotalPuissanceConsommee);
+        sprintf(tmp, "<br>En cours : AutoConsommation=%ld Wh TotalSolaire=%ld Wh R=%d%% TotalConsommee=%ld Wh R=%d%%", G_AutoConsommation/3600, G_TotalPuissanceSolaire/3600, r1, G_TotalPuissanceConsommee/3600, r2);
+	fputs(tmp, fHTML);
+	r1 = getPercent(G_AutoConsommationAvant, G_TotalPuissanceSolaireAvant);
+	r2 = getPercent(G_AutoConsommationAvant, G_TotalPuissanceConsommeeAvant);
+        sprintf(tmp, "<br>An n-1   : AutoConsommation=%ld Wh TotalSolaire=%ld Wh R=%d%% TotalConsommee=%ld Wh R=%d%%", G_AutoConsommationAvant/3600, G_TotalPuissanceSolaireAvant/3600, r1, G_TotalPuissanceConsommeeAvant/3600, r2);
+	fputs(tmp, fHTML);
+        sprintf(tmp, "<br>Duree protection Gel : %d s ", G_DureeProtectionGel);
 	fputs(tmp, fHTML);
 	n = sprintf(tmp, "</CENTER></body></html>");
 	fputs(tmp, fHTML);
@@ -499,6 +524,7 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
 	int maxHour;
 	int firstMonth;
 	int lastMonth;
+	int r1, r2;
 	
 	fHTML = fopen(HTML_SMARTPHONE_FILE, "w");
 	if (fHTML < 0)
@@ -526,10 +552,16 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
         addKeyword(fHTML, "@ETAT_PRISE_CONNECTEE",   relais);
         addKeyword(fHTML, "@KM_ZOE",                 (G_PuissanceTotalAnnee/36000/14));
         addKeyword(fHTML, "@INDEX_LINKY",            G_compteurEDF);
+	r1 = getPercent(G_AutoConsommation, G_TotalPuissanceSolaire);
+	r2 = getPercent(G_AutoConsommation, G_TotalPuissanceConsommee);
+	addKeyword(fHTML, "@TAUX_PRODUCTION_SOLAIRE",r1);
+	addKeyword(fHTML, "@TAUX_AUTOCONSOMMATION",  r2);
+
 	sprintf(tmp, "<br>Page generee le %d/%d/%d %02d:%02d:%02d LogSol Version %s",
 		pTime->tm_mday, (pTime->tm_mon+1), (pTime->tm_year+1900), pTime->tm_hour, pTime->tm_min, pTime->tm_sec, VERSION);
 	fputs(tmp, fHTML);
 	fputs("</body></html>\r\n", fHTML);
+
 	fclose(fHTML);
 
 	return 0;
@@ -1365,7 +1397,21 @@ int main(int argc, char **argv)
                             }
 			}
 
-		printf(" Puiss. Solaire Inst=%d CompteurEDF=%d PuissanceAppEDF=%d PuissanceProdEDF=%d prise=%d (%d W)\n", G_Puissance, G_compteurEDF, G_pAppEDF, G_prodEDF, (G_Relais_1 == 1) ? lastPower : -1, (G_Relais_1 == 1) ? (lastPower*DIVIDER_POWER_REMOTE_PLUG/100)+THRESHOLD_POWER_REMOTE_PLUG:-1);
+		G_TotalPuissanceSolaire += G_Puissance*PERIODE_RELEVE;
+		if (G_prodEDF > 0)
+			{
+			// Cas ou l'on fournit...
+			G_AutoConsommation += ((G_Puissance - G_prodEDF)*PERIODE_RELEVE);
+			G_TotalPuissanceConsommee += (G_Puissance - G_prodEDF)*PERIODE_RELEVE;
+                	}
+		else
+			{
+			// Cas ou l'on consomme...
+			G_AutoConsommation += (G_Puissance*PERIODE_RELEVE);
+			G_TotalPuissanceConsommee += (G_pAppEDF + G_Puissance)*PERIODE_RELEVE;
+			}
+
+		printf(" Puiss. Solaire Inst=%d CompteurEDF=%d PuissanceAppEDF=%d PuissanceProdEDF=%d AutoConso=%d prise=%d (%d W)\n", G_Puissance, G_compteurEDF, G_pAppEDF, G_prodEDF, G_AutoConsommation/3600, (G_Relais_1 == 1) ? lastPower : -1, (G_Relais_1 == 1) ? (lastPower*DIVIDER_POWER_REMOTE_PLUG/100)+THRESHOLD_POWER_REMOTE_PLUG:-1);
 		count += PERIODE_RELEVE;
 
 		if (s.TpanneauxSolaires <= 5 && s.pompe != 0)
@@ -1500,6 +1546,12 @@ int main(int argc, char **argv)
 			{
 				G_PuissanceTotalAnneeAvant = G_PuissanceTotalAnnee;
 				G_PuissanceTotalAnnee = 0;
+				G_AutoConsommationAvant = G_AutoConsommation;
+				G_AutoConsommation = 0;
+				G_TotalPuissanceSolaireAvant = G_TotalPuissanceSolaire;
+				G_TotalPuissanceSolaire = 0;
+				G_TotalPuissanceConsommeeAvant = G_TotalPuissanceConsommee;
+				G_TotalPuissanceConsommee = 0;
 			}
         G_PuissanceTotalJour += G_Puissance*PERIODE_RELEVE;
         G_PuissanceTotalAnnee += G_Puissance*PERIODE_RELEVE;
