@@ -49,7 +49,7 @@
 #define PERIOD_STAT  900
 #define PERIODE_RELEVE  5
 #define UDP_PORT_RELAY                5006
-#define THRESHOLD_POWER_REMOTE_PLUG   200
+#define THRESHOLD_POWER_REMOTE_PLUG   100
 #define DIVIDER_POWER_REMOTE_PLUG     172
 
 // Index for Domoticz

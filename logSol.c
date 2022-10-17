@@ -1353,7 +1353,7 @@ int main(int argc, char **argv)
 			{
                         if (countRelais < 1)
                             countRelais++;
-                        else if (G_pAppEDF >= 100)
+                        else if (G_pAppEDF >= 200)
                             {
 			    //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
                             lastPower = setESPRelay(0, 0);
@@ -1363,22 +1363,30 @@ int main(int argc, char **argv)
                         else
                             {
                             previousPower = lastPower;
-                            if (G_prodEDF > 300)
+                            const int seuil = G_Puissance >= 400 ? -100 : 50;
+                            const int signedProd = (G_prodEDF - G_pAppEDF);
+                            //printf("   ProdSolaire=%d ProductionSolaire=%d Consomme=%d signedProd=%d seuil=%d lastPower=%d",
+                            //    G_Puissance, G_prodEDF, G_pAppEDF, signedProd, seuil, lastPower);
+                            if (signedProd > (seuil+100))
+                                lastPower += 60;
+                            else if (signedProd > (seuil+80))
                                 lastPower += 40;
-                            else if (G_prodEDF > 200)
+                            else if (signedProd > (seuil+60))
                                 lastPower += 20;
-                            else if (G_prodEDF > 120)
+                            else if (signedProd > (seuil+40))
                                 lastPower += 10;
-                            else if (G_prodEDF > 50)
+                            else if (signedProd >  (seuil+20))
+                                lastPower += 5;
+                            else if (signedProd > (seuil+10))
 				lastPower++;
-                            if (G_prodEDF == 0)
-				lastPower  = (lastPower < 40) ? 0 : lastPower -  40;
-                            else if (G_prodEDF < 10)
-				lastPower =  (lastPower < 20) ? 0 : lastPower - 20;
-                            else if (G_prodEDF < 30)
-				lastPower -= 10;
-                            else if (G_prodEDF < 40)
-				lastPower--;
+                            else if (signedProd < (seuil-40))
+                                lastPower -= 60;
+                            else if (signedProd < (seuil-30))
+                                lastPower -= 40;
+                            else if (signedProd < (seuil-20))
+                                lastPower -= 10;
+                            else if (signedProd < (seuil-10))
+                                lastPower--;
                             if (lastPower > 255)
                                 lastPower = 255;
                             if (lastPower < 0)
