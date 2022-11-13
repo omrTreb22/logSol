@@ -6,6 +6,7 @@
 // 08/02/2018 : 5.1 - Interface Domoticz                  //
 // 28/10/2018 : 5.2 - Comparaison calcul Tarif jour/nuit  //
 // 30/11/2019 : 6.0 - Thread UDP pour wattmetre           //
+// 07/11/2022 : 7.0 - Kit Air Chaud Ameliore              //
 //--------------------------------------------------------//
 
 #include <stdio.h>
@@ -35,6 +36,8 @@ int GetEnvoy(int *pCumul, int *pCurrent);
 void genHtmlDomoticzCommand(char *tmp);
 void log_printf(const char * format, ... );
 void genHtmlESPRelay(char *tmp);
+void genHtmlDomoticz(int index, int value);
+void genHtmlDomoticzFloat(int index, float value);
 
 unsigned long G_resetCounter = 0;
 unsigned long G_lastResetCounter = 0;
@@ -50,6 +53,9 @@ int G_compteurEDF;
 int G_globalProdEDF;
 int G_pAppEDF;
 int G_prodEDF;
+float G_T1;
+float G_T2;
+int G_fan = 0;
 FILE *G_fdLog;
 int G_logFileIndex = 0;
 int G_lastCompteurEDF = 0;
@@ -144,7 +150,7 @@ void *UDP_monitoring_thread(void *param)
                 &len); 
         buffer[n] = '\0'; 
 
-        //printf("[UDP Thread] Receive from %s\n", buffer);
+        printf("[UDP Thread] Receive from %s\n", buffer);
 
         if (strncmp(buffer, "PZEM_SOLAIRE", 12) == 0)
             {
@@ -219,6 +225,27 @@ void *UDP_monitoring_thread(void *param)
                     }//if (s2)
                 }//if (s1)
             }//if (TELEINFO)
+        else if (strncmp(buffer, "TEMP", 4) == 0)
+        {
+            float fTemp1, fTemp2;
+            fTemp1 = atof(&buffer[5]);
+            int n = 5;
+            while (buffer[n] != 32)
+                n++;
+            fTemp2 = atof(&buffer[n]);
+            if (fTemp1 > 0.0 && fTemp2 > 0.0 && fTemp1 < 140.0 && fTemp2 < 140.0)
+            {
+                G_T1 = fTemp1;
+                G_T2 = fTemp2;
+                printf("[UDP Thread] Receive Temperatures [%f, %f]", G_T1, G_T2);
+                genHtmlDomoticzFloat(DOMOTICZ_INDEX_T1, G_T1);
+                genHtmlDomoticzFloat(DOMOTICZ_INDEX_T2, G_T2);
+            }
+            else
+            {
+                printf("[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f]", G_T1, G_T2);
+            }
+        }
         else
             printf("[UDP Thread] Data not recognized : %s", buffer);
         }//while (noError)
@@ -511,6 +538,14 @@ void addKeyword(FILE *fd, char *word, int value)
     fputs(tmp, fd);
 }
 
+void addKeywordFloat(FILE *fd, char *word, float value)
+{
+    char tmp[128];
+  
+    sprintf(tmp, "%s %f <br>\r\n", word, value);
+    fputs(tmp, fd);
+}
+
 //
 // Function genereHTML
 //
@@ -556,6 +591,9 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
 	r2 = getPercent(G_AutoConsommation, G_TotalPuissanceConsommee);
 	addKeyword(fHTML, "@TAUX_PRODUCTION_SOLAIRE",r1);
 	addKeyword(fHTML, "@TAUX_AUTOCONSOMMATION",  r2);
+        addKeywordFloat(fHTML, "@T1",                     G_T1);
+        addKeywordFloat(fHTML, "@T2",                     G_T2);
+        addKeyword(fHTML, "@FAN",                    G_fan);
 
 	sprintf(tmp, "<br>Page generee le %d/%d/%d %02d:%02d:%02d LogSol Version %s",
 		pTime->tm_mday, (pTime->tm_mon+1), (pTime->tm_year+1900), pTime->tm_hour, pTime->tm_min, pTime->tm_sec, VERSION);
@@ -580,6 +618,14 @@ void genHtmlDomoticz(int index, int value)
     char tmp[256];
 
     sprintf(tmp, "GET /json.htm?type=command&param=udevice&idx=%d&nvalue=0&svalue=%d HTTP/1.0\r\n\r\n", index, value);
+    genHtmlDomoticzCommand(tmp);
+}
+
+void genHtmlDomoticzFloat(int index, float value)
+{
+    char tmp[256];
+
+    sprintf(tmp, "GET /json.htm?type=command&param=udevice&idx=%d&nvalue=0&svalue=%f HTTP/1.0\r\n\r\n", index, value);
     genHtmlDomoticzCommand(tmp);
 }
 
@@ -977,14 +1023,17 @@ int setESPRelay(int state, int value)
     struct sockaddr_in addr_serveur;
     int nb_octets;
 
+    if (G_fan == 0 && state == 1)
+        G_fan = 2;
+
     tmp[0] = 'R';
     tmp[1] = 'E';
     tmp[2] = 'L';
     tmp[3] = 'A';
-    tmp[4] = state;
-    tmp[5] = value;
+    tmp[4] = state + G_fan;
+    tmp[5] = (value & 0xFF);
            
-    //printf("setESPRelay : Envoie de state=%d value=%d\n", state, value);
+    //printf("setESPRelay : Envoie de state=%d value=%d\n", state+G_fan, value);
 
     struct hostent *hostinfo = NULL;
     hostinfo = gethostbyname(IP_ADDRESS_ESP_RELAY); /* on récupère les informations de l'hôte auquel on veut se connecter */
@@ -1007,67 +1056,6 @@ int setESPRelay(int state, int value)
         }
     return value;
 }
-#if 0
-int setESPRelay(int state, int value)
-{
-    char tmp[6];
-    int lg;
-    struct sockaddr_in addr_serveur;
-    int nb_octets;
-    int code;
-    int power = 0;
-
-    // Conversion de la valeur selon la formule W = code x 1.72 + 570  (W=code x DIVIDER_POWER_REMOTE_PLUG + THRESHOLD_POWER_REMOTE_PLUG)
-    // code = (W - 570)*100/172
-    if (value > 1000)
-        value = 1000;
-    if (state == 1 && value <= THRESHOLD_POWER_REMOTE_PLUG)
-        {
-        state = 0;
-        code = 0;
-        power = 0;
-        }
-    else if (state)
-        {
-        if (value > THRESHOLD_POWER_REMOTE_PLUG + THRESHOLD_POWER_REMOTE_PLUG/2)
-            code = (value - THRESHOLD_POWER_REMOTE_PLUG)*100/DIVIDER_POWER_REMOTE_PLUG;
-        else
-            code = 0;
-        power = (code * DIVIDER_POWER_REMOTE_PLUG/100) + THRESHOLD_POWER_REMOTE_PLUG;
-        }
-    else
-        code = 0;
-    tmp[0] = 'R';
-    tmp[1] = 'E';
-    tmp[2] = 'L';
-    tmp[3] = 'A';
-    tmp[4] = state;
-    tmp[5] = code;
-           
-    //printf("setESPRelay : Envoie de state=%d code=%d (power=%d)\n", state, code, power);
-
-    struct hostent *hostinfo = NULL;
-    hostinfo = gethostbyname(IP_ADDRESS_ESP_RELAY); /* on récupère les informations de l'hôte auquel on veut se connecter */
-    if (hostinfo == NULL) /* l'hôte n'existe pas */
-        {
-        fprintf (stderr, "Unknown host %s.\n", IP_ADDRESS_ESP_RELAY);
-        return 0;
-        }
-
-    memset(&addr_serveur, 0, sizeof(struct sockaddr_in)); 
-    addr_serveur.sin_family = AF_INET; 
-    addr_serveur.sin_port = htons(UDP_PORT_RELAY); 
-    memcpy(&addr_serveur.sin_addr.s_addr, hostinfo->h_addr, hostinfo->h_length);
-    lg = sizeof(struct sockaddr_in);
-    nb_octets = sendto(g_sockUDPRelay, tmp, 6, 0, (struct sockaddr*)&addr_serveur, lg);
-    if (nb_octets == -1) 
-        {
-        perror("erreur envoi message"); 
-        return 0;
-        }
-    return power;
-}
-#endif
 
 void genHtmlESPRelay(char *tmp)
 {
@@ -1265,9 +1253,10 @@ int main(int argc, char **argv)
 	int G_Relais_1 = 0;
         pthread_t threadUDP;
         int lastPower, previousPower;
+        int nTimeToStop = 0;
 	
         initESPRelay();
-        setESPRelay(0, 0);
+        setESPRelay(0, 1);
 
 	int start=1;
         G_resetGlobalWattmetreSolaire = 0;
@@ -1340,12 +1329,21 @@ int main(int argc, char **argv)
 			count = 0;
 			}
 
+		// Mise a jour de la date reelle
+		if (-1 == gettimeofday(&clock, NULL))
+			{
+			printf("Error : gettimeofday returns -1 - errno=%d\n", errno);
+			close(fd);
+			return 0;
+			}
+		pTime = localtime((time_t *)&clock.tv_sec);
+
                 // Gestion de la prise commandee
 		if (G_prodEDF > THRESHOLD_POWER_REMOTE_PLUG && G_Relais_1 == 0)
 			{
 			G_Relais_1 = 1;
-			lastPower = setESPRelay(1, 0);
-			//printf("Declenchement du Relais 1 avec value 0 (ProdEDF=%d)\n", lastPower, G_prodEDF);
+			lastPower = setESPRelay(1, 1);
+			//printf("Declenchement du Relais 1 avec valeur 1 (ProdEDF=%d)\n", lastPower, G_prodEDF);
 			genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
                         countRelais = 0;
 			}
@@ -1356,22 +1354,21 @@ int main(int argc, char **argv)
                         else if (G_pAppEDF >= 200)
                             {
 			    //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
-                            lastPower = setESPRelay(0, 0);
+                            lastPower = setESPRelay(0, 1);
 			    G_Relais_1 = 0;
+                            nTimeToStop = pTime->tm_min+15;
+                            if (nTimeToStop > 59)
+                                nTimeToStop = nTimeToStop - 60;
 			    genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
                             }
                         else
                             {
                             previousPower = lastPower;
-                            const int seuil = G_Puissance >= 400 ? -100 : 50;
+                            const int seuil = (G_Puissance >= 400 && G_T2 < 24.0) ? -100 : 50;
                             const int signedProd = (G_prodEDF - G_pAppEDF);
                             //printf("   ProdSolaire=%d ProductionSolaire=%d Consomme=%d signedProd=%d seuil=%d lastPower=%d",
                             //    G_Puissance, G_prodEDF, G_pAppEDF, signedProd, seuil, lastPower);
-                            if (signedProd > (seuil+100))
-                                lastPower += 60;
-                            else if (signedProd > (seuil+80))
-                                lastPower += 40;
-                            else if (signedProd > (seuil+60))
+                            if (signedProd > (seuil+60))
                                 lastPower += 20;
                             else if (signedProd > (seuil+40))
                                 lastPower += 10;
@@ -1388,11 +1385,19 @@ int main(int argc, char **argv)
                             else if (signedProd < (seuil-10))
                                 lastPower--;
                             if (lastPower > 255)
-                                lastPower = 255;
+                                {
+                                if (signedProd > 50 || previousPower == 256)
+                                    lastPower = 256;
+                                else
+                                    lastPower = 255;
+                                }
                             if (lastPower < 0)
                                {
-			       lastPower = setESPRelay(0, 0);
+			       lastPower = setESPRelay(0, 1);
 			       G_Relais_1 = 0;
+                               nTimeToStop = pTime->tm_min+15;
+                               if (nTimeToStop > 59)
+                                   nTimeToStop = nTimeToStop - 60;
 			       genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
 			       //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
                                }
@@ -1402,6 +1407,7 @@ int main(int argc, char **argv)
                                countRelais = 0;
 			       //printf("Reprogrammation du Relais 1 : previous=%d new=%d (prodEDF=%d)\n", previousPower, lastPower, G_prodEDF);
                                }
+			    genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, lastPower);
                             }
 			}
 
@@ -1459,14 +1465,27 @@ int main(int argc, char **argv)
 			dczPompe = 0;
 		}
 
-		// Mise a jour de la date reelle
-		if (-1 == gettimeofday(&clock, NULL))
-			{
-			printf("Error : gettimeofday returns -1 - errno=%d\n", errno);
-			close(fd);
-			return 0;
-			}
-		pTime = localtime((time_t *)&clock.tv_sec);
+                // Arreter les ventileurs apres 23h
+                if (pTime->tm_hour >= 23 && G_fan && G_Relais_1 == 0)
+                {
+                    G_fan = 0;
+                    setESPRelay(0, 1);
+                }
+                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 0 && G_T1 > (G_T2+3.0) && G_Relais_1 == 0)
+                {
+                    G_fan = 2;
+                    setESPRelay(0, 1);
+                }
+
+                if (G_Relais_1 == 0 && pTime->tm_sec < 5)
+                {
+                    setESPRelay(0, 1);
+                }
+                if (G_Relais_1 == 0 && G_fan == 2 && nTimeToStop == pTime->tm_min)
+                {
+                    G_fan = 0;
+                    setESPRelay(0, 1);
+                }
 
 		// Moyenner la valeur sur la duree
 		if (pTime->tm_hour >= 7 && pTime->tm_hour < 23 )

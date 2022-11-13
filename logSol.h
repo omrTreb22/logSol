@@ -61,13 +61,17 @@
 #define DOMOTICZ_INDEX_PRODUCTION_JOURNEE  6
 #define DOMOTICZ_INDEX_DUREE_PROT_GEL      7
 #define DOMOTICZ_INDEX_KM_ZOE              9
-#define DOMOTICZ_INDEX_CONSO_EDF			  11
+#define DOMOTICZ_INDEX_CONSO_EDF           11
 #define DOMOTICZ_INDEX_PROD_EDF            12
 #define DOMOTICZ_INDEX_RELAIS_COMMANDE     13
+#define DOMOTICZ_INDEX_T1                  14
+#define DOMOTICZ_INDEX_T2                  15
+#define DOMOTICZ_INDEX_PRISE_COMMANDEE     16
+
 
 #define IP_ADDRESS_ESP_WATT_SOLAIRE        "192.168.1.93"
 #define IP_ADDRESS_ESP_EDF                 "192.168.1.91"
-#define IP_ADDRESS_ESP_RELAY               "192.168.1.66"
+#define IP_ADDRESS_ESP_RELAY               "192.168.1.94"
 #define IP_ADDRESS_ENVOY                   "192.168.1.86"
 #define IP_ADDRESS_DOMOTICZ                "192.168.1.77"
 #define PORT_UDP                           5005
