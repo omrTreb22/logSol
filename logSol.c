@@ -1023,9 +1023,6 @@ int setESPRelay(int state, int value)
     struct sockaddr_in addr_serveur;
     int nb_octets;
 
-    if (G_fan == 0 && state == 1)
-        G_fan = 2;
-
     tmp[0] = 'R';
     tmp[1] = 'E';
     tmp[2] = 'L';
@@ -1349,26 +1346,28 @@ int main(int argc, char **argv)
 			}
                  else if (G_Relais_1 == 1)
 			{
-                        if (countRelais < 1)
+                        if (countRelais < 2)
                             countRelais++;
-                        else if (G_pAppEDF >= 200)
+                        else if (G_pAppEDF >= 300)
                             {
 			    //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
                             lastPower = setESPRelay(0, 1);
 			    G_Relais_1 = 0;
-                            nTimeToStop = pTime->tm_min+15;
-                            if (nTimeToStop > 59)
-                                nTimeToStop = nTimeToStop - 60;
 			    genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
                             }
                         else
                             {
                             previousPower = lastPower;
-                            const int seuil = (G_Puissance >= 400 && G_T2 < 24.0) ? -100 : 50;
+                            //const int seuil = (G_Puissance >= 400 && G_T2 < 24.0) ? -100 : 50;
+                            const int seuil = 0;
                             const int signedProd = (G_prodEDF - G_pAppEDF);
                             //printf("   ProdSolaire=%d ProductionSolaire=%d Consomme=%d signedProd=%d seuil=%d lastPower=%d",
                             //    G_Puissance, G_prodEDF, G_pAppEDF, signedProd, seuil, lastPower);
-                            if (signedProd > (seuil+60))
+                            if (signedProd > (seuil+100) && lastPower > 80)
+                                lastPower += 60;
+                            else if (signedProd > (seuil+80) && lastPower > 80)
+                                lastPower += 40;
+                            else if (signedProd > (seuil+60) && lastPower > 80)
                                 lastPower += 20;
                             else if (signedProd > (seuil+40))
                                 lastPower += 10;
@@ -1376,6 +1375,8 @@ int main(int argc, char **argv)
                                 lastPower += 5;
                             else if (signedProd > (seuil+10))
 				lastPower++;
+                            else if (signedProd < (seuil-60))
+                                lastPower -= 80;
                             else if (signedProd < (seuil-40))
                                 lastPower -= 60;
                             else if (signedProd < (seuil-30))
@@ -1391,22 +1392,26 @@ int main(int argc, char **argv)
                                 else
                                     lastPower = 255;
                                 }
-                            if (lastPower < 0)
+                            if (lastPower < 1)
                                {
-			       lastPower = setESPRelay(0, 1);
-			       G_Relais_1 = 0;
-                               nTimeToStop = pTime->tm_min+15;
-                               if (nTimeToStop > 59)
-                                   nTimeToStop = nTimeToStop - 60;
-			       genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-			       //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
+                               if (previousPower > 1)
+			           lastPower = 1;
+                               else
+                                   {
+			           G_Relais_1 = 0;
+                                   nTimeToStop = pTime->tm_min+15;
+                                   if (nTimeToStop > 59)
+                                       nTimeToStop = nTimeToStop - 60;
+			           genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
+			           //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
+                                   }
                                }
                             else
                                {
 			       lastPower = setESPRelay(1, lastPower);
-                               countRelais = 0;
 			       //printf("Reprogrammation du Relais 1 : previous=%d new=%d (prodEDF=%d)\n", previousPower, lastPower, G_prodEDF);
                                }
+                            countRelais = 0;
 			    genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, lastPower);
                             }
 			}
@@ -1471,10 +1476,16 @@ int main(int argc, char **argv)
                     G_fan = 0;
                     setESPRelay(0, 1);
                 }
-                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 0 && G_T1 > (G_T2+3.0) && G_Relais_1 == 0)
+                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 26.0 || G_T2 >= 24.0))
                 {
                     G_fan = 2;
-                    setESPRelay(0, 1);
+                    if (G_Relais_1 == 0)
+                        setESPRelay(0, 1);
+                    else
+                        setESPRelay(1, lastPower);
+                    nTimeToStop = pTime->tm_min+15;
+                    if (nTimeToStop > 59)
+                        nTimeToStop = nTimeToStop - 60;
                 }
 
                 if (G_Relais_1 == 0 && pTime->tm_sec < 5)
