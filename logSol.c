@@ -1250,7 +1250,7 @@ int main(int argc, char **argv)
 	int G_Relais_1 = 0;
         pthread_t threadUDP;
         int lastPower, previousPower;
-        int nTimeToStop = 0;
+        int nTimeToStop = -1;
 	
         initESPRelay();
         setESPRelay(0, 1);
@@ -1476,6 +1476,14 @@ int main(int argc, char **argv)
                     G_fan = 0;
                     setESPRelay(0, 1);
                 }
+                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 24.0 && G_T2 < 24.0))
+                {
+                    G_fan = 0;
+                    if (G_Relais_1 == 0)
+                        setESPRelay(0, 1);
+                    else
+                        setESPRelay(1, lastPower);
+                }
                 if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 26.0 || G_T2 >= 24.0))
                 {
                     G_fan = 2;
@@ -1492,8 +1500,9 @@ int main(int argc, char **argv)
                 {
                     setESPRelay(0, 1);
                 }
-                if (G_Relais_1 == 0 && G_fan == 2 && nTimeToStop == pTime->tm_min)
+                if (G_Relais_1 == 0 && G_fan == 2 && nTimeToStop == pTime->tm_min && (G_T1 <= 24.0 && G_T2 < 24.0))
                 {
+                    nTimeToStop = -1;
                     G_fan = 0;
                     setESPRelay(0, 1);
                 }
