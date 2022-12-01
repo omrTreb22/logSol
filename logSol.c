@@ -15,6 +15,7 @@
 #include <termios.h>
 #include <signal.h>
 #include <string.h>
+#include <math.h>
 #include <time.h>
 #include <sys/time.h>
 #include <poll.h>
@@ -56,6 +57,7 @@ int G_prodEDF;
 float G_T1;
 float G_T2;
 int G_fan = 0;
+int G_Relais_1 = 0;
 FILE *G_fdLog;
 int G_logFileIndex = 0;
 int G_lastCompteurEDF = 0;
@@ -95,8 +97,99 @@ int openSerialPort(void);
 void saveData(void);
 void loadData(void);
 int getData(int fd, struct sInfo *s);
+int setESPRelay(int state, int value);
+void genHtmlDomoticzSwitch(int index, int value);
 
 
+struct point
+{   
+    int index;
+    int power;
+};
+ 
+#define MAX_MESURES  6
+
+// This measures comes from direct mesure of consumption of Radiator
+struct point mesures[MAX_MESURES] = { {1,79}, {40, 272}, {100, 387}, {150, 430}, {200, 470}, {255, 500} };
+ 
+int getIndexFromPower(int power)
+{
+    if (power >= 643)
+           return 256;
+ 
+       if (power < 79)
+           return -1;
+             
+    for (int i = 1 ; i < MAX_MESURES ; i++)
+           {
+              int offset = 0;
+                    
+              if (power <= mesures[i].power)
+                  {
+                     float a = (float)(mesures[i].power - mesures[i-1].power) / (float)(mesures[i].index - mesures[i-1].index);
+                     float b = mesures[i-1].power;
+                    
+                     // y = a.x+b -> x = (y - b) / a
+                     float index = (float)(power - b) / (float)a + (float)mesures[i-1].index;
+                     if ((index - floor(index)) >= 0.5)
+                           offset = 1;
+                     return (int)(index+offset);
+                     }
+              }
+      
+       return 255;
+}
+ 
+int getPowerFromIndex(int index)
+{
+    if (index < 1)
+        return 0;
+
+    if (index == 256)
+           return 643;
+ 
+    for (int i = 1 ; i < MAX_MESURES ; i++)
+           {
+              if (index <= mesures[i].index)
+                  {
+                     float a = (float)((mesures[i].power - mesures[i-1].power)) / (float)((mesures[i].index - mesures[i-1].index));
+                     float b = mesures[i-1].power;
+                    
+                     // y = a.x+b
+                     float power = a * (index - mesures[i-1].index) + b;
+                     if (power < 100.0)
+                         return (int)power;
+                     return (int)(power - power/10.0);
+                     }
+              }
+      
+       return -1;
+}
+
+int updatePower(int lastIndex, int power)
+{
+    int newPower = power + getPowerFromIndex(lastIndex);
+    int newIndex = getIndexFromPower(newPower);
+
+    printf("updatePower: lastIndex=%d power=%d RealPower=%d newIndex=%d\n", lastIndex, power, newPower, newIndex);
+
+    if (newIndex == lastIndex)
+        return newIndex;
+
+    if (newIndex < 1)
+        {
+        setESPRelay(0, 1);
+        if (G_Relais_1)
+            genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
+        G_Relais_1 = 0;
+        return newIndex;
+        }
+    setESPRelay(1, newIndex);
+    if (G_Relais_1 == 0)
+        genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
+    G_Relais_1 = 1;
+    return newIndex; 
+}
 
 void signal_function(int param)
 {
@@ -150,7 +243,7 @@ void *UDP_monitoring_thread(void *param)
                 &len); 
         buffer[n] = '\0'; 
 
-        printf("[UDP Thread] Receive from %s\n", buffer);
+        //printf("[UDP Thread] Receive from %s\n", buffer);
 
         if (strncmp(buffer, "PZEM_SOLAIRE", 12) == 0)
             {
@@ -237,7 +330,7 @@ void *UDP_monitoring_thread(void *param)
             {
                 G_T1 = fTemp1;
                 G_T2 = fTemp2;
-                printf("[UDP Thread] Receive Temperatures [%f, %f]", G_T1, G_T2);
+                //printf("[UDP Thread] Receive Temperatures [%f, %f]", G_T1, G_T2);
                 genHtmlDomoticzFloat(DOMOTICZ_INDEX_T1, G_T1);
                 genHtmlDomoticzFloat(DOMOTICZ_INDEX_T2, G_T2);
             }
@@ -1051,6 +1144,10 @@ int setESPRelay(int state, int value)
         perror("erreur envoi message"); 
         return 0;
         }
+    if (state == 0)
+        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, -1);
+    else
+        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, value);
     return value;
 }
 
@@ -1247,9 +1344,8 @@ int main(int argc, char **argv)
 	int dczCount = 0;
 	int dczGelPrevious = -1;
 	int dczKmZoePrevious = -1;
-	int G_Relais_1 = 0;
         pthread_t threadUDP;
-        int lastPower, previousPower;
+        int lastPower = -1;
         int nTimeToStop = -1;
 	
         initESPRelay();
@@ -1335,6 +1431,7 @@ int main(int argc, char **argv)
 			}
 		pTime = localtime((time_t *)&clock.tv_sec);
 
+#if 0
                 // Gestion de la prise commandee
 		if (G_prodEDF > THRESHOLD_POWER_REMOTE_PLUG && G_Relais_1 == 0)
 			{
@@ -1415,6 +1512,14 @@ int main(int argc, char **argv)
 			    genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, lastPower);
                             }
 			}
+#endif
+                if (countRelais < 1)
+                    countRelais++;
+                else
+                    {
+                    countRelais = 0;
+                    lastPower = updatePower(lastPower, (G_prodEDF - G_pAppEDF));
+                    }
 
 		G_TotalPuissanceSolaire += G_Puissance*PERIODE_RELEVE;
 		if (G_prodEDF > 0)
@@ -1430,7 +1535,7 @@ int main(int argc, char **argv)
 			G_TotalPuissanceConsommee += (G_pAppEDF + G_Puissance)*PERIODE_RELEVE;
 			}
 
-		printf(" Puiss. Solaire Inst=%d CompteurEDF=%d PuissanceAppEDF=%d PuissanceProdEDF=%d AutoConso=%d prise=%d (%d W)\n", G_Puissance, G_compteurEDF, G_pAppEDF, G_prodEDF, G_AutoConsommation/3600, (G_Relais_1 == 1) ? lastPower : -1, (G_Relais_1 == 1) ? (lastPower*DIVIDER_POWER_REMOTE_PLUG/100)+THRESHOLD_POWER_REMOTE_PLUG:-1);
+		//printf(" Puiss. Solaire Inst=%d CompteurEDF=%d PuissanceAppEDF=%d PuissanceProdEDF=%d AutoConso=%d prise=%d (%d W)\n", G_Puissance, G_compteurEDF, G_pAppEDF, G_prodEDF, G_AutoConsommation/3600, (G_Relais_1 == 1) ? lastPower : -1, (G_Relais_1 == 1) ? (lastPower*DIVIDER_POWER_REMOTE_PLUG/100)+THRESHOLD_POWER_REMOTE_PLUG:-1);
 		count += PERIODE_RELEVE;
 
 		if (s.TpanneauxSolaires <= 5 && s.pompe != 0)
@@ -1476,7 +1581,7 @@ int main(int argc, char **argv)
                     G_fan = 0;
                     setESPRelay(0, 1);
                 }
-                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 24.0 && G_T2 < 24.0))
+                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 22.0 && G_T2 < 22.0))
                 {
                     G_fan = 0;
                     if (G_Relais_1 == 0)
@@ -1484,7 +1589,7 @@ int main(int argc, char **argv)
                     else
                         setESPRelay(1, lastPower);
                 }
-                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 26.0 || G_T2 >= 24.0))
+                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 26.0 || G_T2 >= 25.0))
                 {
                     G_fan = 2;
                     if (G_Relais_1 == 0)
