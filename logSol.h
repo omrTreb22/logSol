@@ -44,8 +44,6 @@
 #define LOGSOL_TXT_FILE "/home/logSol/logSolData.txt"
 #define LOGSOL_CUMUL_MONTH_TXT_FILE "/home/logSol/logSolCumulMonthData.txt"
 #define HTML_FILE    "/var/www/index.html"
-#define HISTO_FILE    "/var/www/histo.html"
-#define HTML_SMARTPHONE_FILE "/var/www/smartData.html"
 #define PERIOD_STAT  900
 #define PERIODE_RELEVE  5
 #define UDP_PORT_RELAY                5006

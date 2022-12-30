@@ -107,17 +107,19 @@ struct point
     int power;
 };
  
-#define MAX_MESURES  6
-
+#define MAX_MESURES  27
 // This measures comes from direct mesure of consumption of Radiator
-struct point mesures[MAX_MESURES] = { {1,79}, {40, 272}, {100, 387}, {150, 430}, {200, 470}, {255, 500} };
+//struct point mesures[MAX_MESURES] = { {1,79}, {40, 272}, {100, 387}, {150, 430}, {200, 470}, {255, 500} };
+struct point mesures[MAX_MESURES] = {{1,8}, {11,38}, {21,155}, {31,218}, {41,274}, {51,306}, {61,323}, {71,353}, {81,371}, {91,388}, {101,400}, 
+{111,417}, {121,426}, {131,439}, {141,452}, {151,457}, {161,466}, {171,472}, {181,478}, {191,484}, {201,487}, 
+{211,490}, {221,497}, {231,502}, {241,504}, {251,508}, {255,511}};   // {256,557}
  
 int getIndexFromPower(int power)
 {
-    if (power >= 643)
+    if (power >= 557)
            return 256;
  
-       if (power < 79)
+       if (power < 8)
            return -1;
              
     for (int i = 1 ; i < MAX_MESURES ; i++)
@@ -146,7 +148,7 @@ int getPowerFromIndex(int index)
         return 0;
 
     if (index == 256)
-           return 643;
+           return 557;
  
     for (int i = 1 ; i < MAX_MESURES ; i++)
            {
@@ -345,284 +347,6 @@ void *UDP_monitoring_thread(void *param)
    return 0;
 }
 
-//
-// Function genereHTML
-//
-int genHTML(struct sInfo *s, struct tm *pTime)
-{
-	FILE *fHTML;
-	int n = 0;
-	int i;
-	int index;
-	int nbMonths;
-	int maxHour;
-	int firstMonth;
-	int lastMonth;
-	int current, cumul;
-	int max;
-	int temp;
-	int r1, r2;
-	
-	fHTML = fopen(HTML_FILE, "w");
-	if (fHTML < 0)
-		{
-		printf("-- Error : cannot open %s\n", HTML_FILE);
-		return 0;
-		}
-		
-	fputs("<html><head><META HTTP-EQUIV=\"refresh\" CONTENT=\"60\"><TITLE>Installation Solaire de Lan Ar Gleiz</TITLE></head><body>", fHTML);
-	fputs("<script> (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){\r\n", fHTML);
-	fputs("  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),\r\n", fHTML);
-	fputs("  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)\r\n", fHTML);
-	fputs("  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');\r\n", fHTML);
-	fputs("  ga('create', 'UA-44232486-1', 'lvam.dyndns.org');\r\n", fHTML);
-	fputs("  ga('send', 'pageview');\r\n", fHTML);
-	fputs("</script>\r\n", fHTML);
-	fputs("<h1>Installation solaire de Lan Ar Gleiz</h1>", fHTML);
-
-	fputs("<center><a href=\"histo.html\">Historique mensuel</a>", fHTML);
-	fputs("<TABLE BORDER WIDTH=\"90%\"><TR><TD ALIGN=CENTER>", fHTML);
-	sprintf(tmp, "<img src=\"http://chart.apis.google.com/chart?cht=gom&chd=t:%d&chs=300x200&chl=T=%d&chds=0,80&chco=00FF00,FF0000&chdl=Temperature%%20Panneaux%%20Solaires&chdlp=b\"></TD><TD ALIGN=CENTER>",
-		s->TpanneauxSolaires, s->TpanneauxSolaires); 
-	fputs(tmp, fHTML);
-	sprintf(tmp, "<img src=\"http://chart.apis.google.com/chart?cht=gom&chd=t:%d&chs=300x200&chl=T=%d&chds=0,80&chco=00FF00,FF0000&chdl=Temperature%%20Cuve&chdlp=b\"></TD><TD ALIGN=CENTER>",
-		s->Tcuve, s->Tcuve); 
-	fputs(tmp, fHTML);
-	sprintf(tmp, "<img src=\"http://chart.apis.google.com/chart?cht=gom&chd=t:%d&chs=300x200&chl=T=%d&chds=0,80&chco=00FF00,FF0000&chdl=Temperature%%20E.C.S&chdlp=b\"></TD></TR>",
-		s->Tchaudiere, s->Tchaudiere); 
-	fputs(tmp, fHTML);
-	fputs("<TR><TH COLSPAN=3 ALIGN=CENTER>Mode de fonctionnement : ", fHTML);
-	if (s->mode == 'C')
-		fputs("CHAUDIERE + Prechauffage solaire", fHTML);
-	else
-		fputs("SOLAIRE + Appoint EDF", fHTML);
-	fputs("</TR>", fHTML);
-		
-	fputs("<TR><TH COLSPAN=3 ALIGN=CENTER>Historique detaille sur 2 heures<br>\r\n", fHTML);
-
-// Generation du graphique HOUR
-	max = 1;
-	for (i = 0 ; i < LOG_DURATION ; i++)
-       if (tabPuissance[i] > max)  max = tabPuissance[i];
-
-	n = 0;
-	n = sprintf(tmp, "<img src=\"http://chart.apis.google.com/chart?cht=lc&chd=s:");
-
-	for (i = 0 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabHourIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-        temp = tabPuissance[index]*62/max;
-        if (temp >= 62) temp = 61;
-		n += sprintf(&tmp[n], "%c", listData[temp]);
-		}
-
-	n += sprintf(&tmp[n], "&chs=900x200&chco=FF0000&chdl=Puissance(%dW)&chg=0,13\"><br><br>\r\n",max);
-	fputs(tmp, fHTML);
-
-	n = 0;
-	n = sprintf(tmp, "<img src=\"http://chart.apis.google.com/chart?cht=lc&chd=s:");
-	for (i = 0 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabHourIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabHour[index].TpanneauxSolaires*SCALE_FACTOR]);
-			}
-		else
-			n+= sprintf(&tmp[n], "%c,", listData[tabHour[index].TpanneauxSolaires*SCALE_FACTOR]);
-		}
-	for (i = 0 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabHourIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabHour[index].Tcuve*SCALE_FACTOR]);
-			}
-		else
-			{
-			n+= sprintf(&tmp[n], "%c,", listData[tabHour[index].Tcuve*SCALE_FACTOR]);
-			}
-		}
-	for (i = 0 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabHourIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabHour[index].Tchaudiere*SCALE_FACTOR]);
-			}
-		else
-			{
-			n+= sprintf(&tmp[n], "%c,", listData[tabHour[index].Tchaudiere*SCALE_FACTOR]);
-			}
-		}
-	for (i = 0 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabHourIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		if (i < (LOG_DURATION-1))
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabHour[index].pompe*SCALE_FACTOR]);
-			}
-		else
-			{
-			n+= sprintf(&tmp[n], "%c", listData[tabHour[index].pompe*SCALE_FACTOR]);
-			}
-		}
-
-	n+= sprintf(&tmp[n], "&chs=900x200&chco=FF0000,0000FF,F0F000,00FF00&chdl=T.P.Solaires|T.cuve|T.chaudiere|Pompe&chg=0,13\"></TH></TR>");
-	fputs(tmp, fHTML);		
-
-// Generation du graphique DAY
-	fputs("<TR><TH COLSPAN=3 ALIGN=CENTER>Historique sur 6 jours (tous les 1/4h, sauf 0h-7h)<br>", fHTML);
-
-	max = 1;
-	for (i = 0 ; i < LOG_DURATION ; i++)
-	{
-		if (i == nCurrentTabDayIndex)
-			temp = tabDay[i].puissance / 3600;
-		else
-			temp = tabDay[i].puissance;
-		if (temp > max) max = temp;
-	}
-
-	n = 0;
-	n = sprintf(tmp, "<img src=\"http://chart.apis.google.com/chart?cht=lc&chd=s:");
-
-	for (i = 0 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabDayIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-        temp = tabDay[index].puissance*62/max;
-        if (temp >= 62) temp = 61;
-        if (temp < 0) temp = 0;
-		n += sprintf(&tmp[n], "%c", listData[temp]);
-		}
-
-	n += sprintf(&tmp[n], "&chs=900x200&chco=FF0000&chdl=Puissance(%dWh)&chg=0,13\"><br><br>\r\n", max);
-	fputs(tmp, fHTML);
-
-	n = 0;
-	n+= sprintf(&tmp[n], "<img src=\"http://chart.apis.google.com/chart?cht=lc&chd=s:");
-	for (i = 1 ; i < LOG_DURATION ; i++)
-		{
-	        index = (nCurrentTabDayIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].TpanneauxSolaires*SCALE_FACTOR));
-		}
-	for (i = 1 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabDayIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].Tcuve*SCALE_FACTOR));
-		}
-	for (i = 1 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabDayIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].Tchaudiere*SCALE_FACTOR));
-		}
-	for (i = 1 ; i < LOG_DURATION ; i++)
-		{
-		index = (nCurrentTabDayIndex + i);
-		if (index >= LOG_DURATION)
-			index = index - LOG_DURATION;
-		n+= sprintf(&tmp[n], "%c", CONV(tabDay[index].pompe*SCALE_FACTOR));
-		}
-
-	n+= sprintf(&tmp[n], "&chs=900x200&chco=FF0000,0000FF,F0F000,00FF00&chdl=T.P.Solaires|T.cuve|T.chaudiere|Pompe&chg=0,13\"></TH></TR>");
-	fputs(tmp, fHTML);	
-
-// Generation du graphique MONTH
-	fputs("<TR><TH COLSPAN=3 ALIGN=CENTER>Historique mensuel<br>", fHTML);
-
-	// Calcul du nombre de mois a afficher et du maximum d'heures
-	nbMonths = 0;
-	maxHour = 0;
-	for (i = 0 ; i < LOG_MONTH_DURATION ; i++)
-		{
-		if (strlen(tabCumulMonth[i].month))
-			{
-			nbMonths++;
-			if ((tabCumulMonth[i].nbSeconds / 3600) > maxHour)
-				maxHour = (tabCumulMonth[i].nbSeconds / 3600);
-			}
-		}
-
-	firstMonth = 0;
-	lastMonth = firstMonth + NB_MONTHS_DISPLAY - 1;
-	if (lastMonth >= nbMonths)
-		lastMonth = nbMonths - 1;
-				
-	while (firstMonth < nbMonths)
-		{	
-		n = 0;
-		n+= sprintf(&tmp[n], "<img src=\"http://chart.apis.google.com/chart?chs=900x%d&cht=bhs&chco=4D89F9&chbh=20&chd=s:", ((lastMonth - firstMonth + 1)*25));	
-			
-		for (i = firstMonth ; i <= lastMonth ; i++)
-			{
-			if (strlen(tabCumulMonth[i].month))
-				{
-				//printf("Calcul du mois %s - Max=%d - Val=%d - Index=%d\n", tabCumulMonth[i].month, maxHour, (tabCumulMonth[i].nbSeconds / 3600), (tabCumulMonth[i].nbSeconds / 3600 * 61)/maxHour); 
-				n += sprintf(&tmp[n], "%c", listData[(tabCumulMonth[i].nbSeconds / 3600 * 61)/maxHour]);
-				}
-			}
-		n += sprintf(&tmp[n], "&chxl=0:");
-		for (i = lastMonth ; i >= firstMonth ; i--)
-			{
-			if (strlen(tabCumulMonth[i].month))
-				{
-				n += sprintf(&tmp[n], "|%s-(%3dh)", tabCumulMonth[i].month, (tabCumulMonth[i].nbSeconds / 3600));
-				}
-			}
-		n += sprintf(&tmp[n], "&chxt=y&chm=N,000000,0,-1,11\"><br>");
-		fputs(tmp, fHTML);
-		
-		firstMonth = lastMonth + 1;
-		lastMonth = lastMonth + NB_MONTHS_DISPLAY;
-		if (lastMonth >= nbMonths)
-			lastMonth = nbMonths - 1;
-		}
-			
-	n = sprintf(tmp, "</TH></TR></TABLE><br><CENTER>Page generee le %d/%d/%d %02d:%02d:%02d LogSol Version %s - ",
-		pTime->tm_mday, (pTime->tm_mon+1), (pTime->tm_year+1900), pTime->tm_hour, pTime->tm_min, pTime->tm_sec, VERSION);
-		 
-	fputs(tmp, fHTML);
-    	n = sprintf(tmp, "<br>Puissance Solaire=%d W (Reset=%u) Pconso=%d W Pfournie=%d W", G_Puissance, G_resetGlobalWattmetreSolaire, G_pAppEDF, G_prodEDF);
-	fputs(tmp, fHTML);
-	n = sprintf(tmp, " Journalier=%d Wh Hier=%d Wh Annuel=%d kWh (An n-1=%d kWh)  soit <a>%d km</a><br>", G_PuissanceTotalJour/3600, G_PuissanceTotalJourAvant/3600, G_PuissanceTotalAnnee/3600000, G_PuissanceTotalAnneeAvant/3600000,
-			G_PuissanceTotalAnnee/36000/14);
-	fputs(tmp, fHTML);
-	r1 = getPercent(G_AutoConsommation, G_TotalPuissanceSolaire);
-	r2 = getPercent(G_AutoConsommation, G_TotalPuissanceConsommee);
-        sprintf(tmp, "<br>En cours : AutoConsommation=%ld Wh TotalSolaire=%ld Wh R=%d%% TotalConsommee=%ld Wh R=%d%%", G_AutoConsommation/3600, G_TotalPuissanceSolaire/3600, r1, G_TotalPuissanceConsommee/3600, r2);
-	fputs(tmp, fHTML);
-	r1 = getPercent(G_AutoConsommationAvant, G_TotalPuissanceSolaireAvant);
-	r2 = getPercent(G_AutoConsommationAvant, G_TotalPuissanceConsommeeAvant);
-        sprintf(tmp, "<br>An n-1   : AutoConsommation=%ld Wh TotalSolaire=%ld Wh R=%d%% TotalConsommee=%ld Wh R=%d%%", G_AutoConsommationAvant/3600, G_TotalPuissanceSolaireAvant/3600, r1, G_TotalPuissanceConsommeeAvant/3600, r2);
-	fputs(tmp, fHTML);
-        sprintf(tmp, "<br>Duree protection Gel : %d s ", G_DureeProtectionGel);
-	fputs(tmp, fHTML);
-	n = sprintf(tmp, "</CENTER></body></html>");
-	fputs(tmp, fHTML);
-
-	fclose(fHTML);
-
-	return 0;
-}
-
 void addKeyword(FILE *fd, char *word, int value)
 {
     char tmp[128];
@@ -654,10 +378,10 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
 	int lastMonth;
 	int r1, r2;
 	
-	fHTML = fopen(HTML_SMARTPHONE_FILE, "w");
+	fHTML = fopen(HTML_FILE, "w");
 	if (fHTML < 0)
 		{
-		printf("-- Error : cannot open %s\n", HTML_SMARTPHONE_FILE);
+		printf("-- Error : cannot open %s\n", HTML_FILE);
 		return 0;
 		}
 		
@@ -677,7 +401,7 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
         addKeyword(fHTML, "@PUISSANCE_SOLAIRE",      G_Puissance);
         addKeyword(fHTML, "@PUISSANCE_CONSOMMEE",    G_pAppEDF);
         addKeyword(fHTML, "@PUISSANCE_INJECTEE",     G_prodEDF);
-        addKeyword(fHTML, "@ETAT_PRISE_CONNECTEE",   relais);
+        addKeyword(fHTML, "@PUISSANCE_PRISE_CONNECTEE", getPowerFromIndex(relais));
         addKeyword(fHTML, "@KM_ZOE",                 (G_PuissanceTotalAnnee/36000/14));
         addKeyword(fHTML, "@INDEX_LINKY",            G_compteurEDF);
 	r1 = getPercent(G_AutoConsommation, G_TotalPuissanceSolaire);
@@ -1145,9 +869,9 @@ int setESPRelay(int state, int value)
         return 0;
         }
     if (state == 0)
-        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, -1);
+        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, 0);
     else
-        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, value);
+        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, getPowerFromIndex(value));
     return value;
 }
 
@@ -1351,7 +1075,6 @@ int main(int argc, char **argv)
         initESPRelay();
         setESPRelay(0, 1);
 
-	int start=1;
         G_resetGlobalWattmetreSolaire = 0;
         G_Puissance = 0;
         G_Puissance_PZEM_EDF = 0;
@@ -1708,16 +1431,7 @@ int main(int argc, char **argv)
         G_PuissanceTotalJour += G_Puissance*PERIODE_RELEVE;
         G_PuissanceTotalAnnee += G_Puissance*PERIODE_RELEVE;
 
-		genHTML(&s, pTime);
 		genDataSmartphone(&s, pTime, (G_Relais_1 ? lastPower : -1));
-		
-		if (pTime->tm_min == 0 && (pTime->tm_hour > 10 && pTime->tm_hour < 21) && pTime->tm_sec < 10)
-			genHTMLHistorique(&s, pTime);
-		if (start == 1)
-			{
-			start = 0;
-			genHTMLHistorique(&s, pTime);
-			}
 		}
 		
 	printf("Fermeture du port - Sortie du programme\n");
