@@ -62,6 +62,8 @@ FILE *G_fdLog;
 int G_logFileIndex = 0;
 int G_lastCompteurEDF = 0;
 int g_sockUDPRelay;
+int nBoxRepairStat = 0;
+int nBoxRepairStat24 = 0;
 long G_AutoConsommation = 0;
 long G_AutoConsommationAvant = 0;
 long G_TotalPuissanceSolaire = 0;
@@ -107,6 +109,11 @@ struct point
     int power;
 };
  
+int checkInternet(void)
+{
+    return system("ping -c 1 lvam.dyndns.org");
+}
+
 #define MAX_MESURES  27
 // This measures comes from direct mesure of consumption of Radiator
 //struct point mesures[MAX_MESURES] = { {1,79}, {40, 272}, {100, 387}, {150, 430}, {200, 470}, {255, 500} };
@@ -176,7 +183,11 @@ int updatePower(int lastIndex, int power)
     printf("updatePower: lastIndex=%d power=%d RealPower=%d newIndex=%d\n", lastIndex, power, newPower, newIndex);
 
     if (newIndex == lastIndex)
+        {
+        if (newIndex > 0)
+            setESPRelay(1, newIndex);
         return newIndex;
+        }
 
     if (newIndex < 1)
         {
@@ -332,7 +343,7 @@ void *UDP_monitoring_thread(void *param)
             {
                 G_T1 = fTemp1;
                 G_T2 = fTemp2;
-                //printf("[UDP Thread] Receive Temperatures [%f, %f]", G_T1, G_T2);
+                printf("[UDP Thread] Receive Temperatures [%f, %f]\n", G_T1, G_T2);
                 genHtmlDomoticzFloat(DOMOTICZ_INDEX_T1, G_T1);
                 genHtmlDomoticzFloat(DOMOTICZ_INDEX_T2, G_T2);
             }
@@ -386,13 +397,13 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
 		}
 		
 	fputs("<html><head><META HTTP-EQUIV=\"refresh\" CONTENT=\"5\"><TITLE>Installation Solaire de Lan Ar Gleiz (Version SmartData)</TITLE></head><body>", fHTML);
-	fputs("<script> (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){\r\n", fHTML);
-	fputs("  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),\r\n", fHTML);
-	fputs("  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)\r\n", fHTML);
-	fputs("  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');\r\n", fHTML);
-	fputs("  ga('create', 'UA-44232486-1', 'lvam.dyndns.org');\r\n", fHTML);
-	fputs("  ga('send', 'pageview');\r\n", fHTML);
-	fputs("</script>\r\n", fHTML);
+	//fputs("<script> (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){\r\n", fHTML);
+	//fputs("  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),\r\n", fHTML);
+	//fputs("  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)\r\n", fHTML);
+	//fputs("  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');\r\n", fHTML);
+	//fputs("  ga('create', 'UA-44232486-1', 'lvam.dyndns.org');\r\n", fHTML);
+	//fputs("  ga('send', 'pageview');\r\n", fHTML);
+	//fputs("</script>\r\n", fHTML);
         addKeyword(fHTML, "@TEMPERATURE_PANNEAUX",   s->TpanneauxSolaires);
         addKeyword(fHTML, "@TEMPERATURE_CUVE",       s->Tcuve);
         addKeyword(fHTML, "@TEMPERATURE_EAU_CHAUDE", s->Tchaudiere);
@@ -408,9 +419,11 @@ int genDataSmartphone(struct sInfo *s, struct tm *pTime, int relais)
 	r2 = getPercent(G_AutoConsommation, G_TotalPuissanceConsommee);
 	addKeyword(fHTML, "@TAUX_PRODUCTION_SOLAIRE",r1);
 	addKeyword(fHTML, "@TAUX_AUTOCONSOMMATION",  r2);
-        addKeywordFloat(fHTML, "@T1",                     G_T1);
-        addKeywordFloat(fHTML, "@T2",                     G_T2);
+        addKeywordFloat(fHTML, "@T1",                G_T1);
+        addKeywordFloat(fHTML, "@T2",                G_T2);
         addKeyword(fHTML, "@FAN",                    G_fan);
+        addKeyword(fHTML, "@STAT_BOX_REPAIR",        nBoxRepairStat);
+        addKeyword(fHTML, "@STAT_BOX_REPAIR_24H",    nBoxRepairStat24);
 
 	sprintf(tmp, "<br>Page generee le %d/%d/%d %02d:%02d:%02d LogSol Version %s",
 		pTime->tm_mday, (pTime->tm_mon+1), (pTime->tm_year+1900), pTime->tm_hour, pTime->tm_min, pTime->tm_sec, VERSION);
@@ -833,6 +846,44 @@ void initESPRelay()
         }
 }
 
+int setESPBoxRepair(int state, int value)
+{
+    char tmp[6];
+    int lg;
+    struct sockaddr_in addr_serveur;
+    int nb_octets;
+
+    tmp[0] = 'B';
+    tmp[1] = 'O';
+    tmp[2] = 'X';
+    tmp[3] = 'R';
+    tmp[4] = state;
+    tmp[5] = (value & 0xFF);
+           
+    //printf("setESPRelay : Envoie de state=%d value=%d\n", state+G_fan, value);
+
+    struct hostent *hostinfo = NULL;
+    hostinfo = gethostbyname(IP_ADDRESS_ESP_BOX_REPAIR); /* on récupère les informations de l'hôte auquel on veut se connecter */
+    if (hostinfo == NULL) /* l'hôte n'existe pas */
+        {
+        fprintf (stderr, "Unknown host %s.\n", IP_ADDRESS_ESP_BOX_REPAIR);
+        return 0;
+        }
+
+    memset(&addr_serveur, 0, sizeof(struct sockaddr_in)); 
+    addr_serveur.sin_family = AF_INET; 
+    addr_serveur.sin_port = htons(UDP_PORT_BOX_REPAIR); 
+    memcpy(&addr_serveur.sin_addr.s_addr, hostinfo->h_addr, hostinfo->h_length);
+    lg = sizeof(struct sockaddr_in);
+    nb_octets = sendto(g_sockUDPRelay, tmp, 6, 0, (struct sockaddr*)&addr_serveur, lg);
+    if (nb_octets == -1) 
+        {
+        perror("erreur envoi message"); 
+        return 0;
+        }
+    return value;
+}
+
 int setESPRelay(int state, int value)
 {
     char tmp[6];
@@ -1071,6 +1122,8 @@ int main(int argc, char **argv)
         pthread_t threadUDP;
         int lastPower = -1;
         int nTimeToStop = -1;
+        int nBoxRepairState = 0;
+        int nBoxRepairCounter = 0;
 	
         initESPRelay();
         setESPRelay(0, 1);
@@ -1154,88 +1207,6 @@ int main(int argc, char **argv)
 			}
 		pTime = localtime((time_t *)&clock.tv_sec);
 
-#if 0
-                // Gestion de la prise commandee
-		if (G_prodEDF > THRESHOLD_POWER_REMOTE_PLUG && G_Relais_1 == 0)
-			{
-			G_Relais_1 = 1;
-			lastPower = setESPRelay(1, 1);
-			//printf("Declenchement du Relais 1 avec valeur 1 (ProdEDF=%d)\n", lastPower, G_prodEDF);
-			genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
-                        countRelais = 0;
-			}
-                 else if (G_Relais_1 == 1)
-			{
-                        if (countRelais < 2)
-                            countRelais++;
-                        else if (G_pAppEDF >= 300)
-                            {
-			    //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
-                            lastPower = setESPRelay(0, 1);
-			    G_Relais_1 = 0;
-			    genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-                            }
-                        else
-                            {
-                            previousPower = lastPower;
-                            //const int seuil = (G_Puissance >= 400 && G_T2 < 24.0) ? -100 : 50;
-                            const int seuil = 0;
-                            const int signedProd = (G_prodEDF - G_pAppEDF);
-                            //printf("   ProdSolaire=%d ProductionSolaire=%d Consomme=%d signedProd=%d seuil=%d lastPower=%d",
-                            //    G_Puissance, G_prodEDF, G_pAppEDF, signedProd, seuil, lastPower);
-                            if (signedProd > (seuil+100) && lastPower > 80)
-                                lastPower += 60;
-                            else if (signedProd > (seuil+80) && lastPower > 80)
-                                lastPower += 40;
-                            else if (signedProd > (seuil+60) && lastPower > 80)
-                                lastPower += 20;
-                            else if (signedProd > (seuil+40))
-                                lastPower += 10;
-                            else if (signedProd >  (seuil+20))
-                                lastPower += 5;
-                            else if (signedProd > (seuil+10))
-				lastPower++;
-                            else if (signedProd < (seuil-60))
-                                lastPower -= 80;
-                            else if (signedProd < (seuil-40))
-                                lastPower -= 60;
-                            else if (signedProd < (seuil-30))
-                                lastPower -= 40;
-                            else if (signedProd < (seuil-20))
-                                lastPower -= 10;
-                            else if (signedProd < (seuil-10))
-                                lastPower--;
-                            if (lastPower > 255)
-                                {
-                                if (signedProd > 50 || previousPower == 256)
-                                    lastPower = 256;
-                                else
-                                    lastPower = 255;
-                                }
-                            if (lastPower < 1)
-                               {
-                               if (previousPower > 1)
-			           lastPower = 1;
-                               else
-                                   {
-			           G_Relais_1 = 0;
-                                   nTimeToStop = pTime->tm_min+15;
-                                   if (nTimeToStop > 59)
-                                       nTimeToStop = nTimeToStop - 60;
-			           genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-			           //printf("Arret du Relais 1 (prodEDF=%d pAddEDF=%d)\n", G_prodEDF, G_pAppEDF);
-                                   }
-                               }
-                            else
-                               {
-			       lastPower = setESPRelay(1, lastPower);
-			       //printf("Reprogrammation du Relais 1 : previous=%d new=%d (prodEDF=%d)\n", previousPower, lastPower, G_prodEDF);
-                               }
-                            countRelais = 0;
-			    genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, lastPower);
-                            }
-			}
-#endif
                 if (countRelais < 1)
                     countRelais++;
                 else
@@ -1304,7 +1275,7 @@ int main(int argc, char **argv)
                     G_fan = 0;
                     setESPRelay(0, 1);
                 }
-                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 22.0 && G_T2 < 22.0))
+                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 22.0 && G_T2 < 21.0))
                 {
                     G_fan = 0;
                     if (G_Relais_1 == 0)
@@ -1415,6 +1386,7 @@ int main(int argc, char **argv)
 					G_fdLog = fopen(tmp, "w");
 					fclose(G_fdLog); // To clean the file
 					}
+                                 nBoxRepairStat24 = 0;
 
 			}
 		if (pTime->tm_yday == 0 && pTime->tm_min == 0 && pTime->tm_hour == 0 && pTime->tm_sec <= 5 && G_PuissanceTotalAnnee != 0)
@@ -1430,6 +1402,47 @@ int main(int argc, char **argv)
 			}
         G_PuissanceTotalJour += G_Puissance*PERIODE_RELEVE;
         G_PuissanceTotalAnnee += G_Puissance*PERIODE_RELEVE;
+
+        // Box Repair
+        if (pTime->tm_sec <= 4)
+        {
+            int retCheck = checkInternet();
+            if (retCheck != 0)  // Internet KO
+            {
+                printf("CheckInternet KO - State=%d Counter=%d\n", nBoxRepairState, nBoxRepairCounter);
+                if (nBoxRepairState == 0)
+                {
+                    nBoxRepairCounter++;
+                    if (nBoxRepairCounter == 5)
+                    {
+                        nBoxRepairStat++;
+                        nBoxRepairStat24++;
+                        printf("CheckInternet KO - Resetting BOX Stat=%d Stat24h=%d\n", nBoxRepairStat, nBoxRepairStat24);
+                        setESPBoxRepair(1, 10);
+                        nBoxRepairState = 1;    
+                        nBoxRepairCounter = 0;
+                    }
+                }
+                else
+                {
+                    printf("CheckInternet KO - State=%d Counter=%d\n", nBoxRepairState, nBoxRepairCounter);
+                    nBoxRepairCounter++;
+                    if (nBoxRepairCounter == 5)
+                    {
+                        printf("CheckInternet KO - State=%d Counter=%d - Reentering Full Procedure\n", nBoxRepairState, nBoxRepairCounter);
+                        nBoxRepairState = 0;
+                        nBoxRepairCounter = 0;
+                    }
+                }
+            }
+            else // Internet OK
+            {
+                nBoxRepairState = 0;
+                nBoxRepairCounter = 0;
+                printf("CheckInternet OK - State=%d Counter=%d\n", nBoxRepairState, nBoxRepairCounter);
+            }
+        }
+        // End Box Repair
 
 		genDataSmartphone(&s, pTime, (G_Relais_1 ? lastPower : -1));
 		}
@@ -1791,7 +1804,7 @@ nextLine:
 		return 0;
 		}
 	s->tm = clock.tv_sec;
-	printf(" (%ds) %d %02d:%02d:%02d %c %d %d %d %d ", (int)s->tm,
+	printf(" (%ds) %d %02d:%02d:%02d %c %d %d %d %d\n", (int)s->tm,
 		jour, heure, minute, seconde, s->mode, s->Tcuve, s->TpanneauxSolaires, s->Tchaudiere, s->pompe);
 
 

@@ -72,7 +72,9 @@
 #define IP_ADDRESS_ESP_RELAY               "192.168.1.94"
 #define IP_ADDRESS_ENVOY                   "192.168.1.86"
 #define IP_ADDRESS_DOMOTICZ                "192.168.1.77"
+#define IP_ADDRESS_ESP_BOX_REPAIR          "192.168.1.66"
 #define PORT_UDP                           5005
+#define UDP_PORT_BOX_REPAIR                5009
 
 // Declaration des types
 typedef void (*sig_t) (int);
