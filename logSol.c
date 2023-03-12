@@ -116,14 +116,22 @@ int checkInternet(void)
 
 #define MAX_MESURES  27
 // This measures comes from direct mesure of consumption of Radiator
-//struct point mesures[MAX_MESURES] = { {1,79}, {40, 272}, {100, 387}, {150, 430}, {200, 470}, {255, 500} };
-struct point mesures[MAX_MESURES] = {{1,8}, {11,38}, {21,155}, {31,218}, {41,274}, {51,306}, {61,323}, {71,353}, {81,371}, {91,388}, {101,400}, 
-{111,417}, {121,426}, {131,439}, {141,452}, {151,457}, {161,466}, {171,472}, {181,478}, {191,484}, {201,487}, 
-{211,490}, {221,497}, {231,502}, {241,504}, {251,508}, {255,511}};   // {256,557}
+
+// Valeurs pour le radiateur connecté en mode 900W (bouton 1 ON, Bouton 2 OFF)
+//struct point mesures[MAX_MESURES] = {{1,8}, {11,38}, {21,155}, {31,218}, {41,274}, {51,306}, {61,323}, {71,353}, {81,371}, {91,388}, {101,400}, 
+//{111,417}, {121,426}, {131,439}, {141,452}, {151,457}, {161,466}, {171,472}, {181,478}, {191,484}, {201,487}, 
+//{211,490}, {221,497}, {231,502}, {241,504}, {251,508}, {255,511}};   // {256,557}
+
+// Valeurs pour le radiateur connecté en mode 1500W (bouton 1 ON, Bouton 2 ON)
+struct point mesures[MAX_MESURES] = {{1,8},{11,94},{21,273},{31,417},{41,494},{51,581},{61,613},{71,670},{81,704},{91,737},{101,760},
+{111,792},{121,809},{131,834},{141,858},{151,868},{161,885},{171,896},{181,908},{191,919},{201,925},
+{211,931},{221,944},{231,953},{241,957},{251,965},{255,970}}; // {256,1058}
  
+#define MAX_VALUE_FOR_MEASURES  1058
+
 int getIndexFromPower(int power)
 {
-    if (power >= 557)
+    if (power >= MAX_VALUE_FOR_MEASURES)
            return 256;
  
        if (power < 8)
@@ -155,7 +163,7 @@ int getPowerFromIndex(int index)
         return 0;
 
     if (index == 256)
-           return 557;
+           return MAX_VALUE_FOR_MEASURES;
  
     for (int i = 1 ; i < MAX_MESURES ; i++)
            {
