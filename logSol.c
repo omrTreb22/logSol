@@ -56,6 +56,10 @@ int G_pAppEDF;
 int G_prodEDF;
 float G_T1;
 float G_T2;
+float G_thSolarPanel = 0.0;
+float G_thCuve = 0.0;
+float G_thECS = 0.0;
+unsigned char G_pump = 0;
 int G_fan = 0;
 int G_Relais_1 = 0;
 FILE *G_fdLog;
@@ -358,6 +362,31 @@ void *UDP_monitoring_thread(void *param)
             else
             {
                 printf("[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f]", G_T1, G_T2);
+            }
+        }
+        else if (strncmp(buffer, "THER", 4) == 0)
+        {
+            float fTemp1, fTemp2, fTemp3;
+            fTemp1 = *(float *)&buffer[4];
+            fTemp2 = *(float *)&buffer[8];
+            fTemp3 = *(float *)&buffer[12];
+            unsigned char pump = buffer[16];
+            if (fTemp1 > 0.0   && fTemp2 > 0.0   && fTemp3 > 0.0   &&
+                fTemp1 < 140.0 && fTemp2 < 140.0 && fTemp3 < 140.0)
+            {
+                G_thSolarPanel = fTemp1;
+                G_thCuve = fTemp2;
+                G_thECS = fTemp3;
+                G_pump = pump;
+                printf("[UDP Thread] Receive Thermal : [%f, %f, %f] Pompe=%d\n", G_thSolarPanel, G_thCuve, G_thECS, G_pump);
+                genHtmlDomoticzFloat(DOMOTICZ_INDEX_PANNEAUX_SOLAIRES, G_thSolarPanel);
+                genHtmlDomoticzFloat(DOMOTICZ_INDEX_CUVE, G_thCuve);
+                genHtmlDomoticzFloat(DOMOTICZ_INDEX_ECS, G_thECS);
+                genHtmlDomoticzSwitch(DOMOTICZ_INDEX_POMPE, G_pump);
+            }
+            else
+            {
+                printf("[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f, %f]", G_thSolarPanel, G_thCuve, G_thECS);
             }
         }
         else
@@ -1114,7 +1143,7 @@ int main(int argc, char **argv)
 	int countDay;
 	int compteur;
         int countRelais = 0;
-	struct sInfo s;
+	struct sInfo s = { 0 };
 	struct timeval clock;
 	struct tm *pTime;
 	int i;
@@ -1155,11 +1184,13 @@ int main(int argc, char **argv)
 	
 	signal(SIGINT, signal_function);
 	
+#if 0
 	fd = openSerialPort();
 	if (fd == -1)
 		{
 		return -1;
 		}
+#endif
 
 	nCurrentTabHourIndex = 0;
 	nCurrentTabDayIndex = LOG_DURATION-1;
@@ -1183,7 +1214,11 @@ int main(int argc, char **argv)
 	ret = 0;
 	while (ret == 0 && leave == 0) 
 		{
-		ret = getData(fd, &s);
+                sleep(5);
+                s.TpanneauxSolaires = G_thSolarPanel;
+                s.Tcuve = G_thCuve;
+                s.Tchaudiere = G_thECS;
+                s.pompe = G_pump;
 		if (count == 60)
 			{
 			tabHour[nCurrentTabHourIndex] = s;
@@ -1283,7 +1318,7 @@ int main(int argc, char **argv)
                     G_fan = 0;
                     setESPRelay(0, 1);
                 }
-                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 22.0 && G_T2 < 21.0))
+                if (pTime->tm_hour > 8 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 22.0 && G_T2 < 21.0))
                 {
                     G_fan = 0;
                     if (G_Relais_1 == 0)
@@ -1291,7 +1326,7 @@ int main(int argc, char **argv)
                     else
                         setESPRelay(1, lastPower);
                 }
-                if (pTime->tm_hour > 9 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 26.0 || G_T2 >= 25.0))
+                if (pTime->tm_hour > 8 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 26.0 || G_T2 >= 25.0))
                 {
                     G_fan = 2;
                     if (G_Relais_1 == 0)
@@ -1673,156 +1708,6 @@ int openSerialPort(void)
 #endif
 
 	return fd;
-}
-
-//
-// Fonction de lecture de la temperature
-//
-int getData(int fd, struct sInfo *s)
-{
-	char buffer[100];
-	char *p;
-	int n;
-	int ret;
-	char c;
-	struct timeval clock;
-	int jour, heure, minute, seconde;
-	
-nextLine:	
-//log_printf("Attente d'une ligne... ");
-	// Lecture d'une ligne jusqu'a 0D-0A
-	n = 0;
-	c = 0;
-	do {
-		ret = read(fd, &c, 1);
-		//printf("%c(%d) ", c, (int)c);
-		if (ret < 1)
-			{
-			log_printf("read on serial port failed\r\n");
-			continue;
-			//return -1;  // 13/09/2012 : au lieu de retourner et d'arreter le programme, continuer a attendre...(risque de blocage)
-			}
-		buffer[n++] = c;
-		if (n == 100)
-			n = 0;
-		} while (c != 10 && !leave);
-	buffer[n] = 0;
-	
-	if (leave)
-		return -1;
-		
-	//printf("Analyse de la ligne :#%s#", buffer);
-		
-	// Analyse de la ligne
-	p = strtok(buffer, " :=");
-	if (p == NULL)
-		goto nextLine;
-	jour = atoi(p);
-	
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	heure = atoi(p);
-	
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	minute = atoi(p);
-	
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	seconde = atoi(p);
-	
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	s->mode = *p;
-	if (s->mode != 'C' && s->mode != 'P')
-		{
-		printf("Mode invalide : %c\n", s->mode);
-		goto nextLine;
-		}
-		
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	s->Tcuve = atoi(p);
-	
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	s->TpanneauxSolaires = atoi(p);
-	
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	s->Tchaudiere = atoi(p);
-	
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	s->pompe = atoi(p);
-//	if (s->pompe == 65)
-//		s->pompe = 30;
-
-#if 0
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	if (strcmp(p, "dTC") != 0)
-		{
-		printf("dTC : %s\n", p);
-		goto nextLine;
-		}
-
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	s->dtChaudiere = atoi(p);
-
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	if (strcmp(p, "dTP") != 0)
-		{
-		printf("dTP : %s\n", p);
-		goto nextLine;
-		}
-
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-	s->dtPrechauffage = atoi(p);
-
-	p = strtok(NULL, " :=");
-	if (p == NULL)
-		goto nextLine;
-
-	if (strncmp(p, "<br>", 4) != 0)
-		{
-		printf("<br> : %s\n", p);
-		goto nextLine;
-		}
-#endif
-
-	if (-1 == gettimeofday(&clock, NULL))
-		{
-		printf("Error : gettimeofday returns -1 - errno=%d\n", errno);
-		return 0;
-		}
-	s->tm = clock.tv_sec;
-	printf(" (%ds) %d %02d:%02d:%02d %c %d %d %d %d\n", (int)s->tm,
-		jour, heure, minute, seconde, s->mode, s->Tcuve, s->TpanneauxSolaires, s->Tchaudiere, s->pompe);
-
-
-	//if (s->TpanneauxSolaires < 0 || s->TpanneauxSolaires > 99)
-	//	s->TpanneauxSolaires = 0;
-	
-	if (s->Tchaudiere < 0 || s->Tchaudiere > 99)
-		s->Tchaudiere = 0;
-	
-	return 0;	
 }
 
 void log_printf(const char * format, ... )
