@@ -1,5 +1,4 @@
+all: nLogSol
 
-all: logSol
-
-logSol: logSol.c histo.c
-	gcc -o logSol logSol.c histo.c
+nLogSol: nLogSol.cpp
+	g++ -o nLogSol -lm -l pthread  -Wno-write-strings nLogSol.cpp
