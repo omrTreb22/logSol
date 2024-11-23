@@ -192,7 +192,7 @@ int updatePower(int lastIndex, int power)
     int newPower = power + getPowerFromIndex(lastIndex);
     int newIndex = getIndexFromPower(newPower);
 
-    printf("updatePower: lastIndex=%d power=%d RealPower=%d newIndex=%d\n", lastIndex, power, newPower, newIndex);
+    printf("                                                                         updatePower: lastIndex=%d power=%d RealPower=%d newIndex=%d\n", lastIndex, power, newPower, newIndex);
 
     if (newIndex == lastIndex)
         {
@@ -268,7 +268,7 @@ void *UDP_monitoring_thread(void *param)
                 &len); 
         buffer[n] = '\0'; 
 
-        //printf("[UDP Thread] Receive from %s\n", buffer);
+        //printf("[UDP Thread] Receive (Len=%d)  %s\n", n, buffer);
 
         if (strncmp(buffer, "PZEM_SOLAIRE", 12) == 0)
             {
@@ -277,9 +277,12 @@ void *UDP_monitoring_thread(void *param)
                 {
                 int p = atoi(++s1);
                 if (p != -1)
+                {
                     G_Puissance = p;
+                    printf("[UDP Thread] Receive Puissance Solaire=%d\n", G_Puissance);
+                }
                 else
-                    printf("[UDP Thread] Read error : previous value reused\n"); 
+                    printf("[UDP Thread] Read error on Puissance Solaire : previous value reused\n"); 
                 s2 = strchr(s1, ' ');
                 if (s2 && (s3=strchr(++s2, ' ')))
                     {
@@ -329,13 +332,17 @@ void *UDP_monitoring_thread(void *param)
                     {
                     G_pAppEDF = atoi(++s1);
                     if (G_pAppEDF == 0)
+                    {
                         G_prodEDF = G_Puissance_PZEM_EDF;
+                        printf("[UDP Thread] Receive Puissance PZEM Production=%d\n", G_prodEDF);
+                    }
                     else
-                       {
+                    {
                        G_pAppEDF = G_Puissance_PZEM_EDF;
                        G_prodEDF = 0;
-                       }
-                    }//if (s1)
+                       printf("[UDP Thread] Receive Puissance PZEM Conso EDF=%d\n", G_pAppEDF);
+                    }
+                }//if (s1)
                 s1 = strchr(s1, ' ');
                 if (s1)
                     {
@@ -347,10 +354,10 @@ void *UDP_monitoring_thread(void *param)
         {
             float fTemp1, fTemp2;
             fTemp1 = atof(&buffer[5]);
-            int n = 5;
-            while (buffer[n] != 32)
-                n++;
-            fTemp2 = atof(&buffer[n]);
+            int m = 5;
+            while (buffer[m] != 32)
+                m++;
+            fTemp2 = atof(&buffer[m]);
             if (fTemp1 > 0.0 && fTemp2 > 0.0 && fTemp1 < 140.0 && fTemp2 < 140.0)
             {
                 G_T1 = fTemp1;
@@ -361,7 +368,7 @@ void *UDP_monitoring_thread(void *param)
             }
             else
             {
-                printf("[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f]", G_T1, G_T2);
+                printf("[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f]\n", G_T1, G_T2);
             }
         }
         else if (strncmp(buffer, "THER", 4) == 0)
@@ -386,11 +393,11 @@ void *UDP_monitoring_thread(void *param)
             }
             else
             {
-                printf("[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f, %f]", G_thSolarPanel, G_thCuve, G_thECS);
+                printf("[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f, %f]\n", G_thSolarPanel, G_thCuve, G_thECS);
             }
         }
         else
-            printf("[UDP Thread] Data not recognized : %s", buffer);
+            printf("[UDP Thread] Data not recognized : %s\n", buffer);
         }//while (noError)
    return 0;
 }
@@ -1318,7 +1325,7 @@ int main(int argc, char **argv)
                     G_fan = 0;
                     setESPRelay(0, 1);
                 }
-                if (pTime->tm_hour > 8 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 22.0 && G_T2 < 21.0))
+                if (pTime->tm_hour > 8 && pTime->tm_hour < 23 && G_fan == 2 && (G_T1 <= 22.0 && G_T2 < 20.0))
                 {
                     G_fan = 0;
                     if (G_Relais_1 == 0)
@@ -1326,7 +1333,7 @@ int main(int argc, char **argv)
                     else
                         setESPRelay(1, lastPower);
                 }
-                if (pTime->tm_hour > 8 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 26.0 || G_T2 >= 25.0))
+                if (pTime->tm_hour > 8 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 24.0 || G_T2 >= 23.0))
                 {
                     G_fan = 2;
                     if (G_Relais_1 == 0)
@@ -1340,6 +1347,7 @@ int main(int argc, char **argv)
 
                 if (G_Relais_1 == 0 && pTime->tm_sec < 5)
                 {
+                    // Pour demander l'envoi des temperatures
                     setESPRelay(0, 1);
                 }
                 if (G_Relais_1 == 0 && G_fan == 2 && nTimeToStop == pTime->tm_min && (G_T1 <= 24.0 && G_T2 < 24.0))
@@ -1446,6 +1454,7 @@ int main(int argc, char **argv)
         G_PuissanceTotalJour += G_Puissance*PERIODE_RELEVE;
         G_PuissanceTotalAnnee += G_Puissance*PERIODE_RELEVE;
 
+#if 0
         // Box Repair
         if (pTime->tm_sec <= 4)
         {
@@ -1486,6 +1495,7 @@ int main(int argc, char **argv)
             }
         }
         // End Box Repair
+#endif
 
 		genDataSmartphone(&s, pTime, (G_Relais_1 ? lastPower : -1));
 		}
