@@ -14,6 +14,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 
 using std::cout;
 using std::endl;
@@ -93,6 +94,7 @@ unsigned long G_TotalPuissanceSolairePrevious = 0;
 unsigned long G_multiple1Mkm = 0;
          long G_PuissanceAutoConso = 0;
 unsigned long G_TotalPuissanceAutoConso = 0;
+unsigned long G_multiple1MTotalPuissanceAutoConso = 0;
 
 float G_T1 = 0.0;
 float G_T2 = 0.0;
@@ -117,6 +119,7 @@ struct oldPersistentData
     unsigned long totalPuissanceForKm;
     unsigned long multiple1Mkm;
     unsigned long totalPuissanceAutoConso;
+    unsigned long multiple1MTotalPuissanceAutoConso;
 };
 
 struct persistentData
@@ -126,6 +129,7 @@ struct persistentData
     unsigned long totalPuissanceForKm;
     unsigned long multiple1Mkm;
     unsigned long totalPuissanceAutoConso;
+    unsigned long multiple1MTotalPuissanceAutoConso;
 };
 
 struct point
@@ -158,6 +162,8 @@ struct point mesures[MAX_MESURES] = {{1,1}, {60,3},{70,34},{80,63},{85,84},{90,1
 {110,170},{120,207},{130,230},{140,274},{150,302},{160,348},{170,359},{180,404},{200,467},{210,475},{220,516},
 {230,550},{240,588},{250,606},{255,620}};  // 256:1536
 
+using namespace std;
+
 void logError(char *msg)
 {
     char tmp[256];
@@ -175,7 +181,7 @@ void logError(char *msg)
         sprintf(tmp, "%s", msg);
 
     printf("Error: %s\n", tmp);
-    fp = fopen("/home/nLogSol/errors.log", "a");
+    fp = fopen("/home/logSol/errors.log", "a");
     if (fp == NULL)
         return;
     fwrite(tmp, strlen(tmp), 1, fp);
@@ -193,6 +199,7 @@ void saveData()
     data.totalPuissanceForKm = G_TotalPuissanceForKm;
     data.multiple1Mkm = G_multiple1Mkm;
     data.totalPuissanceAutoConso = G_TotalPuissanceAutoConso;
+    data.multiple1MTotalPuissanceAutoConso = G_multiple1MTotalPuissanceAutoConso;
 
     f = open("persistentData-LogSol.dat", O_WRONLY);
     if (f == -1)
@@ -204,11 +211,19 @@ void saveData()
             return;
         }
     }
-    n = write(f, &data, sizeof(struct persistentData));
-    if (n != sizeof(struct persistentData))
+    try
+    {
+        n = write(f, &data, sizeof(struct persistentData));
+        if (n != sizeof(struct persistentData))
+        {
+            char tmp[128];
+            sprintf(tmp, "Error: write persistentData-LogSol.dat file with %d bytes instead of %d", n, sizeof(struct persistentData));
+            logError(tmp);
+        }
+    } catch( const exception & e ) 
     {
         char tmp[128];
-        sprintf(tmp, "Error: write persistentData-LogSol.dat file with %d bytes instead of %d", n, sizeof(struct persistentData));
+        sprintf(tmp, "Exception when writting in persistentData-LogSol.dat with cause %s", e.what());
         logError(tmp);
     }
     close(f);
@@ -238,11 +253,13 @@ void loadData()
     G_TotalPuissanceForKm = data.totalPuissanceForKm;
     G_multiple1Mkm = data.multiple1Mkm;
     G_TotalPuissanceAutoConso = data.totalPuissanceAutoConso;
-    printf("ReadData : TotalPuissanceSolaire   = %ld\n", G_TotalPuissanceSolaire);
-    printf("           multiplePuissanceSol    = %ld\n", G_multiple1MTotalPuissanceSolaire);
-    printf("           TotalPuissanceForKm     = %ld\n", G_TotalPuissanceForKm);
-    printf("           multiple1Mkm            = %ld\n", G_multiple1Mkm);
-    printf("           TotalPuissanceAutoConso = %ld\n", G_TotalPuissanceAutoConso);
+    G_multiple1MTotalPuissanceAutoConso = data.multiple1MTotalPuissanceAutoConso;
+    printf("ReadData : TotalPuissanceSolaire           = %ld\n", G_TotalPuissanceSolaire);
+    printf("           multiplePuissanceSol            = %ld\n", G_multiple1MTotalPuissanceSolaire);
+    printf("           TotalPuissanceForKm             = %ld\n", G_TotalPuissanceForKm);
+    printf("           multiple1Mkm                    = %ld\n", G_multiple1Mkm);
+    printf("           TotalPuissanceAutoConso         = %ld\n", G_TotalPuissanceAutoConso/3600);
+    printf("           multipleTotalPuissanceAutoConso = %ld\n", G_multiple1MTotalPuissanceAutoConso*1000);
     close(f);
 }
 
@@ -254,24 +271,32 @@ int getIndexFromPower(int power)
        if (power < 8)
            return -1;
              
-    for (int i = 1 ; i < MAX_MESURES ; i++)
-           {
-              int offset = 0;
+    try
+    {
+        for (int i = 1 ; i < MAX_MESURES ; i++)
+        {
+            int offset = 0;
                     
-              if (power <= mesures[i].power)
-                  {
-                     float a = (float)(mesures[i].power - mesures[i-1].power) / (float)(mesures[i].index - mesures[i-1].index);
-                     float b = mesures[i-1].power;
+            if (power <= mesures[i].power)
+            {
+                float a = (float)(mesures[i].power - mesures[i-1].power) / (float)(mesures[i].index - mesures[i-1].index);
+                float b = mesures[i-1].power;
                     
-                     // y = a.x+b -> x = (y - b) / a
-                     float index = (float)(power - b) / (float)a + (float)mesures[i-1].index;
-                     if ((index - floor(index)) >= 0.5)
-                           offset = 1;
-                     return (int)(index+offset);
-                     }
-              }
-      
-       return 255;
+                // y = a.x+b -> x = (y - b) / a
+                float index = (float)(power - b) / (float)a + (float)mesures[i-1].index;
+                if ((index - floor(index)) >= 0.5)
+                    offset = 1;
+                return (int)(index+offset);
+            }
+        } 
+    } catch( const exception & e )
+    {
+        char tmp[128];
+        sprintf(tmp, "Exception in getIndexFromPower with cause %s", e.what());
+        logError(tmp);
+        return -1;
+    }
+    return 255;
 }
  
 int getPowerFromIndex(int index)
@@ -280,24 +305,30 @@ int getPowerFromIndex(int index)
         return 0;
 
     if (index == 256)
-           return MAX_VALUE_FOR_MEASURES;
+        return MAX_VALUE_FOR_MEASURES;
  
-    for (int i = 1 ; i < MAX_MESURES ; i++)
-           {
-              if (index <= mesures[i].index)
-                  {
-                     float a = (float)((mesures[i].power - mesures[i-1].power)) / (float)((mesures[i].index - mesures[i-1].index));
-                     float b = mesures[i-1].power;
+    try
+    {
+        for (int i = 1 ; i < MAX_MESURES ; i++)
+        {
+            if (index <= mesures[i].index)
+            {
+                float a = (float)((mesures[i].power - mesures[i-1].power)) / (float)((mesures[i].index - mesures[i-1].index));
+                float b = mesures[i-1].power;
                     
-                     // y = a.x+b
-                     float power = a * (index - mesures[i-1].index) + b;
-                     //if (power < 100.0)
-                         return (int)power;
-                     //return (int)(power - power/10.0);
-                     }
-              }
-      
-       return -1;
+                // y = a.x+b
+                float power = a * (index - mesures[i-1].index) + b;
+                return (int)power;
+            }
+        }
+    } catch( const exception & e )
+    {
+        char tmp[128];
+        sprintf(tmp, "Exception in getPowerFromIndex with cause %s", e.what());
+        logError(tmp);
+        return -1;
+    }
+    return -1;
 }
 
 int updatePower(int lastIndex, int power)
@@ -307,36 +338,56 @@ int updatePower(int lastIndex, int power)
 
     printf("                                                                                  updatePower: lastIndex=%d power=%d RealPower=%d newIndex=%d\n", lastIndex, power, newPower, newIndex);
 
-    if (newIndex == lastIndex)
+    try
+    {
+        if (newIndex == lastIndex)
         {
-        if (newIndex > 0)
-            setESPRelay(1, newIndex, 0);
-        return newIndex;
+            if (newIndex > 0)
+                setESPRelay(1, newIndex, 0);
+            return newIndex;
         }
 
-    if (newIndex < 1)
+        if (newIndex < 1)
         {
-        setESPRelay(0, 1, 0);
-        if (G_Relais_1)
-            genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-        G_Relais_1 = 0;
-        return newIndex;
+            setESPRelay(0, 1, 0);
+            if (G_Relais_1)
+                genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
+            G_Relais_1 = 0;
+            return newIndex;
         }
-    setESPRelay(1, newIndex, 0);
-    if (G_Relais_1 == 0)
-        genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
-    G_Relais_1 = 1;
+        setESPRelay(1, newIndex, 0);
+        if (G_Relais_1 == 0)
+            genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
+        G_Relais_1 = 1;
+    } catch( const exception & e )
+    {
+        char tmp[128];
+        sprintf(tmp, "Exception in updatePower with cause %s", e.what());
+        logError(tmp);
+    }
     return newIndex; 
 }
 
 int getPercent(long a, long b)
 {
-	if (b ==0)
-		return 0;
+    int res;
 
-	float ra = (float)a;
-	float rb = (float)b;
-	return (int)(ra*100.0/rb);
+    if (b ==0)
+        return 0;
+
+    float ra = (float)a;
+    float rb = (float)b;
+    try 
+    {
+        res = (int)(ra*100.0/rb);
+    } catch( const exception & e )
+    {
+        char tmp[128];
+        sprintf(tmp, "Exception in getPercent with cause %s", e.what());
+        logError(tmp);
+        res = 0;
+    }
+    return res;
 }
 
 void genHtmlDomoticzCommand(char *tmp)
@@ -622,8 +673,14 @@ void  processPower()
     if (G_PuissanceAutoConso < 0)
         G_PuissanceAutoConso = 0;
     G_TotalPuissanceAutoConso += G_PuissanceAutoConso*PERIODE_RELEVE;
+    if (G_TotalPuissanceAutoConso > (1000 * 36000))
+    {
+        G_TotalPuissanceAutoConso -= (1000 * 36000);
+        G_multiple1MTotalPuissanceAutoConso++;
+    }
+    
     genHtmlDomoticzPower(DOMOTICZ_INDEX_PRODUCTION_INST, G_Puissance, (G_TotalPuissanceSolaire/3600 + G_multiple1MTotalPuissanceSolaire*1000));
-    genHtmlDomoticzPower(DOMOTICZ_INDEX_AUTOCONSO, G_PuissanceAutoConso, (G_TotalPuissanceAutoConso/3600));
+    genHtmlDomoticzPower(DOMOTICZ_INDEX_AUTOCONSO, G_PuissanceAutoConso, (G_TotalPuissanceAutoConso/3600 + G_multiple1MTotalPuissanceAutoConso*1000));
     if (G_TotalPuissanceSolairePrevious != G_TotalPuissanceForKm)
     {
         ret = TRUE;
@@ -950,14 +1007,6 @@ int main(int argc, char **argv)
     struct timeval clock;
 
     printf("logSol - Version " VERSION "\n");
-	
-    signal(SIGINT, signal_function);
-    signal(SIGSEGV, signal_function);
-    signal(SIGTERM, signal_function);
-    signal(SIGABRT, signal_function);
-    signal(SIGILL, signal_function);
-    signal(SIGPOLL, signal_function);
-    signal(SIGSTKFLT, signal_function);
 	
     ret = pthread_create(&threadUDP, NULL, UDP_monitoring_thread, NULL);
     if (ret)
