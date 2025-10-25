@@ -38,11 +38,13 @@ using std::string;
 #include <linux/sockios.h>		/* the SIOCxxx I/O controls	*/
 #include <pthread.h>
 
-#define VERSION                            "8.0"
+#define VERSION                            "8.1"
 #define IP_ADDRESS_DOMOTICZ                "192.168.1.77"
 #define IP_ADDRESS_ESP_RELAY               "192.168.1.94"
+#define IP_ADDRESS_ESP_PUIS                "192.168.1.78"
 #define PORT_UDP                           5005
 #define UDP_PORT_RELAY                     5006
+#define UDP_PORT_PUIS                      5080
 #define UDP_RX_BUFFER                      1000
 #define HTML_FILE                          "/var/www/index.html"
 #define PERIODE_RELEVE                     5
@@ -79,6 +81,7 @@ int G_leave = 0;
 int nLogLevel = 1;
 int powerReceived = 0;
 unsigned long G_compteurEDF = 0;
+unsigned long G_compteurInjectionEDF = 0;
 unsigned long G_pAppEDF = 0;
 unsigned long G_prodEDF = 0;
 unsigned long G_globalProdEDF = 0;
@@ -87,14 +90,17 @@ unsigned long G_Puissance_PZEM_EDF = 0;
 unsigned long G_TotalPuissanceSolaire = 0;
 unsigned long G_multiple1MTotalPuissanceSolaire = 0;
 unsigned long G_TotalPuissanceForKm = 0;
-unsigned long G_AutoConsommation = 0;
-unsigned long G_TotalPuissanceConsommee = 0;
 unsigned long G_previousPump = 0;
 unsigned long G_TotalPuissanceSolairePrevious = 0;
 unsigned long G_multiple1Mkm = 0;
          long G_PuissanceAutoConso = 0;
 unsigned long G_TotalPuissanceAutoConso = 0;
 unsigned long G_multiple1MTotalPuissanceAutoConso = 0;
+unsigned long G_chargeDelestage = 0;
+unsigned long G_globalSeconds = 0;
+unsigned long G_lastReceivedTemperature = 0;
+bool isTemperatureAlarm = 0;
+float G_lastAction = 0.0;
 
 float G_T1 = 0.0;
 float G_T2 = 0.0;
@@ -104,13 +110,12 @@ float G_thECS = 0;
 unsigned long G_pump = 0;
 int G_fan = 0;
 int G_forceFan = 0;
-int G_Relais_1 = 0;
 int G_sockUDPRelay;
 int G_lastPower = 0;
-int G_nTimeToStop = 0;
 int G_count = 0;
 int G_KACA_State = 1;
 int G_saveRequired = 0;
+int G_Stop_KACA = 0;
 
 struct oldPersistentData
 {
@@ -120,6 +125,7 @@ struct oldPersistentData
     unsigned long multiple1Mkm;
     unsigned long totalPuissanceAutoConso;
     unsigned long multiple1MTotalPuissanceAutoConso;
+    unsigned long compteurInjectionEDF;
 };
 
 struct persistentData
@@ -130,6 +136,7 @@ struct persistentData
     unsigned long multiple1Mkm;
     unsigned long totalPuissanceAutoConso;
     unsigned long multiple1MTotalPuissanceAutoConso;
+    unsigned long compteurInjectionEDF;
 };
 
 struct point
@@ -139,7 +146,6 @@ struct point
 };
  
 void genHtmlDomoticzSwitch(int index, int value);
-int setESPRelay(int state, int value, bool noUpdate);
 
 #define MAX_VALUE_FOR_MEASURES  1536
 // This measures comes from direct mesure of consumption of Radiator
@@ -200,6 +206,7 @@ void saveData()
     data.multiple1Mkm = G_multiple1Mkm;
     data.totalPuissanceAutoConso = G_TotalPuissanceAutoConso;
     data.multiple1MTotalPuissanceAutoConso = G_multiple1MTotalPuissanceAutoConso;
+    data.compteurInjectionEDF = G_compteurInjectionEDF/3600;
 
     f = open("persistentData-LogSol.dat", O_WRONLY);
     if (f == -1)
@@ -254,12 +261,14 @@ void loadData()
     G_multiple1Mkm = data.multiple1Mkm;
     G_TotalPuissanceAutoConso = data.totalPuissanceAutoConso;
     G_multiple1MTotalPuissanceAutoConso = data.multiple1MTotalPuissanceAutoConso;
+    G_compteurInjectionEDF = data.compteurInjectionEDF * 3600;
     printf("ReadData : TotalPuissanceSolaire           = %ld\n", G_TotalPuissanceSolaire);
     printf("           multiplePuissanceSol            = %ld\n", G_multiple1MTotalPuissanceSolaire);
     printf("           TotalPuissanceForKm             = %ld\n", G_TotalPuissanceForKm);
     printf("           multiple1Mkm                    = %ld\n", G_multiple1Mkm);
     printf("           TotalPuissanceAutoConso         = %ld\n", G_TotalPuissanceAutoConso/3600);
     printf("           multipleTotalPuissanceAutoConso = %ld\n", G_multiple1MTotalPuissanceAutoConso*1000);
+    printf("           compteurInjectionEDF            = %ld\n", G_compteurInjectionEDF/3600);
     close(f);
 }
 
@@ -301,6 +310,11 @@ int getIndexFromPower(int power)
  
 int getPowerFromIndex(int index)
 {
+    if (G_chargeDelestage)
+    {
+        return (int)((float)G_chargeDelestage * G_lastAction / 100.0);
+    }
+
     if (index < 1)
         return 0;
 
@@ -329,43 +343,6 @@ int getPowerFromIndex(int index)
         return -1;
     }
     return -1;
-}
-
-int updatePower(int lastIndex, int power)
-{
-    int newPower = power + getPowerFromIndex(lastIndex);
-    int newIndex = getIndexFromPower(newPower);
-
-    printf("                                                                                  updatePower: lastIndex=%d power=%d RealPower=%d newIndex=%d\n", lastIndex, power, newPower, newIndex);
-
-    try
-    {
-        if (newIndex == lastIndex)
-        {
-            if (newIndex > 0)
-                setESPRelay(1, newIndex, 0);
-            return newIndex;
-        }
-
-        if (newIndex < 1)
-        {
-            setESPRelay(0, 1, 0);
-            if (G_Relais_1)
-                genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 0);
-            G_Relais_1 = 0;
-            return newIndex;
-        }
-        setESPRelay(1, newIndex, 0);
-        if (G_Relais_1 == 0)
-            genHtmlDomoticzSwitch(DOMOTICZ_INDEX_RELAIS_COMMANDE, 1);
-        G_Relais_1 = 1;
-    } catch( const exception & e )
-    {
-        char tmp[128];
-        sprintf(tmp, "Exception in updatePower with cause %s", e.what());
-        logError(tmp);
-    }
-    return newIndex; 
 }
 
 int getPercent(long a, long b)
@@ -540,55 +517,63 @@ void genDataSmartphone(struct tm *pTime)
     file_out << "@T2 " << G_T2 << "<br>" << endl;
     file_out << "@FAN " << G_fan << "<br>" << endl;
     file_out << "@KACA " << G_KACA_State << "<br>" << endl;
+    file_out << "@DELESTAGE " << G_chargeDelestage << "<br>" << endl;
+    file_out << "@TEMPERATURE_ALARM " << isTemperatureAlarm << "<br>" << endl;
 
     file_out << "<br>Page generee le " << pTime->tm_mday << "/" << (pTime->tm_mon+1) << "/" << (pTime->tm_year+1900) << " " \
              << pTime->tm_hour << ":" << pTime->tm_min << ":" << pTime->tm_sec << " LogSol Version " << VERSION << "</body></html>" << endl;
     return;
 }
 
-int setESPRelay(int state, int value, bool noUpdate)
+void sendPuissance(int pSoutiree, int pInjectee)
 {
-    char tmp[6];
+#define SIZE_PUISSANCE 17
+    char tmp[SIZE_PUISSANCE];
     int lg;
     struct sockaddr_in addr_serveur;
     int nb_octets;
+    unsigned long realCompteurInjectionEDF = G_compteurInjectionEDF / 3600;
 
-    tmp[0] = 'R';
-    tmp[1] = 'E';
-    tmp[2] = 'L';
-    tmp[3] = 'A';
-    tmp[4] = state + G_fan;
-    tmp[5] = (value & 0xFF);
+    tmp[0] = 'P';
+    tmp[1] = 'U';
+    tmp[2] = 'I';
+    tmp[3] = 'S';
+    tmp[4] = (pSoutiree & 0xFF);
+    tmp[5] = (pSoutiree >> 8);
+    tmp[6] = (pInjectee & 0xFF);
+    tmp[7] = (pInjectee >> 8);
+    tmp[8] = (G_compteurEDF & 0x000000FF);
+    tmp[9] = (G_compteurEDF & 0x0000FF00) >> 8;
+    tmp[10]= (G_compteurEDF & 0x00FF0000) >> 16;
+    tmp[11]= (G_compteurEDF &0xFF000000) >> 24;
+    tmp[12]= (realCompteurInjectionEDF & 0x000000FF);
+    tmp[13]= (realCompteurInjectionEDF & 0x0000FF00) >> 8;
+    tmp[14]= (realCompteurInjectionEDF & 0x00FF0000) >> 16;
+    tmp[15]= (realCompteurInjectionEDF &0xFF000000) >> 24;
+    tmp[16]= G_fan;
            
-    //printf("setESPRelay : Envoie de state=%d value=%d\n", state+G_fan, value);
+    printf("                                                                                  sendPuissance : Envoie de pSoutiree=%d pInjectee=%d IndexLinky=%d IndexInjection=%ld stateFan=%d\n", pSoutiree, pInjectee, G_compteurEDF, G_compteurInjectionEDF, G_fan);
 
     struct hostent *hostinfo = NULL;
-    hostinfo = gethostbyname(IP_ADDRESS_ESP_RELAY); /* on récupère les informations de l'hôte auquel on veut se connecter */
+    hostinfo = gethostbyname(IP_ADDRESS_ESP_PUIS); /* on récupère les informations de l'hôte auquel on veut se connecter */
     if (hostinfo == NULL) /* l'hôte n'existe pas */
         {
-        fprintf (stderr, "Unknown host %s.\n", IP_ADDRESS_ESP_RELAY);
-        return 0;
+        fprintf (stderr, "Unknown host %s.\n", IP_ADDRESS_ESP_PUIS);
+        return;
         }
 
     memset(&addr_serveur, 0, sizeof(struct sockaddr_in)); 
     addr_serveur.sin_family = AF_INET; 
-    addr_serveur.sin_port = htons(UDP_PORT_RELAY); 
+    addr_serveur.sin_port = htons(UDP_PORT_PUIS); 
     memcpy(&addr_serveur.sin_addr.s_addr, hostinfo->h_addr, hostinfo->h_length);
     lg = sizeof(struct sockaddr_in);
-    nb_octets = sendto(G_sockUDPRelay, tmp, 6, 0, (struct sockaddr*)&addr_serveur, lg);
+    nb_octets = sendto(G_sockUDPRelay, tmp, SIZE_PUISSANCE, 0, (struct sockaddr*)&addr_serveur, lg);
     if (nb_octets == -1) 
         {
         perror("erreur envoi message"); 
-        return 0;
+        return;
         }
-    if (noUpdate)
-        return value;
-
-    if (state == 0)
-        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, 0);
-    else
-        genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, getPowerFromIndex(value));
-    return value;
+    return;
 }
 
 void processTemperatures()
@@ -600,41 +585,17 @@ void processTemperatures()
     {
         pTime = localtime((time_t *)&clock.tv_sec);
 
-        // Arreter les ventileurs apres 23h
-        if (pTime->tm_hour >= 23 && G_fan && G_Relais_1 == 0  && !G_forceFan && G_KACA_State)
+        if (G_fan == 2 && (G_T2 < (G_T1+1.5) || G_T2 < 22) && !G_forceFan && G_KACA_State)
         {
             G_fan = 0;
-            setESPRelay(0, 1, 0);
-            printf("                                                                                  Il est 23h, arret du Kit Air Chaud Automatisé\n");
-        }
-        if (pTime->tm_hour > 7 && pTime->tm_hour < 23 && G_fan == 2 && G_T2 < 21.0 && !G_forceFan && G_KACA_State)
-        {
-            G_fan = 0;
-            if (G_Relais_1 == 0)
-                setESPRelay(0, 1, 0);
-            else
-                setESPRelay(1, G_lastPower, 0);
             printf("                                                                                  Arret du Kit Air Chaud Automatisé : Temperatures trop faibles\n");
         }
-        if (pTime->tm_hour > 7 && pTime->tm_hour < 23 && G_fan == 0 && (G_T1 >= 21.0 || G_T2 >= 23.0 || (G_T2 > (G_T1+5.0) && G_T2 > 21.0)) && G_KACA_State)
+        float externTemperature = G_thSolarPanel < G_T1 ? G_thSolarPanel : G_T1;
+        float deltaT = externTemperature < 19.0 ? (19.0-externTemperature) : 0;
+        if (G_fan == 0 && (G_T2 >= (23.0 + deltaT)) && G_KACA_State)
         {
             G_fan = 2;
-            if (G_Relais_1 == 0)
-                setESPRelay(0, 1, 0);
-            else
-                setESPRelay(1, G_lastPower, 0);
-            G_nTimeToStop = pTime->tm_min+15;
-            if (G_nTimeToStop > 59)
-                G_nTimeToStop = G_nTimeToStop - 60;
             printf("                                                                                  Démarrage du Kit Air Chaud Automatisé\n");
-        }
-
-        if (G_Relais_1 == 0 && G_fan == 2 && G_nTimeToStop == pTime->tm_min && (G_T1 <= 23.0 && G_T2 < 23.0) && !G_forceFan && G_KACA_State)
-        {
-            G_nTimeToStop = -1;
-            G_fan = 0;
-            setESPRelay(0, 1, 0);
-            printf("                                                                                  Arret du Kit Air Chaud Automatisé sur tiemout : Temperatures trop faibles\n");
         }
     }
 }
@@ -660,22 +621,19 @@ void  processPower()
     {
         // Cas ou l'on fournit...
         G_PuissanceAutoConso = G_Puissance - G_prodEDF - getPowerFromIndex(G_lastPower);
-        G_AutoConsommation += ((G_Puissance - G_prodEDF)*PERIODE_RELEVE);
-        G_TotalPuissanceConsommee += (G_Puissance - G_prodEDF)*PERIODE_RELEVE;
+        G_compteurInjectionEDF += G_prodEDF*PERIODE_RELEVE;   // Unité en Ws (Watt x secondes)
     }
     else
     {
         // Cas ou l'on consomme...
-        G_AutoConsommation += (G_Puissance*PERIODE_RELEVE);
-        G_TotalPuissanceConsommee += (G_pAppEDF + G_Puissance)*PERIODE_RELEVE;
         G_PuissanceAutoConso = G_Puissance - getPowerFromIndex(G_lastPower);
     }
     if (G_PuissanceAutoConso < 0)
         G_PuissanceAutoConso = 0;
     G_TotalPuissanceAutoConso += G_PuissanceAutoConso*PERIODE_RELEVE;
-    if (G_TotalPuissanceAutoConso > (1000 * 36000))
+    if (G_TotalPuissanceAutoConso > (1000 * 3600))
     {
-        G_TotalPuissanceAutoConso -= (1000 * 36000);
+        G_TotalPuissanceAutoConso -= (1000 * 3600);
         G_multiple1MTotalPuissanceAutoConso++;
     }
     
@@ -687,11 +645,25 @@ void  processPower()
         genHtmlDomoticz(DOMOTICZ_INDEX_KM_ZOE, (G_TotalPuissanceForKm/36000/15)+(G_multiple1Mkm * 1000));
         G_TotalPuissanceSolairePrevious = G_TotalPuissanceForKm;
     }
-    if (G_count == 1 && G_KACA_State)
-        G_lastPower = updatePower(G_lastPower, (G_prodEDF - G_pAppEDF));
     G_count = (G_count + 1) & 1;
 
     G_saveRequired = ret;
+
+    if (G_chargeDelestage && G_KACA_State)
+    {
+        if (G_prodEDF)
+            sendPuissance(0, G_prodEDF);
+        else
+            sendPuissance(G_pAppEDF, 0);
+    }
+    if (G_chargeDelestage && !G_KACA_State && G_Stop_KACA)
+    {
+        if (G_Stop_KACA == 1)
+            sendPuissance(0, 0);
+        else
+            sendPuissance(1000, 0);
+        G_Stop_KACA--;
+    }
 }
 
 char *getNextWord(char *s)
@@ -716,18 +688,10 @@ void processCommand(int command, int value)
     case COMMAND_FAN_ON :
         G_forceFan = 1;
         G_fan = 2;
-        if (G_Relais_1 == 0)
-            setESPRelay(0, 1, 0);
-        else
-            setESPRelay(1, G_lastPower, 0);
         break;
     case COMMAND_FAN_OFF:
         G_forceFan = 0;
         G_fan = 0;
-        if (G_Relais_1 == 0)
-            setESPRelay(0, 1, 0);
-        else
-            setESPRelay(1, G_lastPower, 0);
         break;
     case COMMAND_KACA_ON:
         G_KACA_State = 1;
@@ -735,9 +699,9 @@ void processCommand(int command, int value)
     case COMMAND_KACA_OFF:
         G_KACA_State = 0;
         G_lastPower = 0;
-        G_Relais_1 = 0;
         G_fan = 0;
-        setESPRelay(0, 1, 0);
+        sendPuissance(1000, 0);
+        G_Stop_KACA = 12;
         break;
     case COMMAND_SETLOG:
         nLogLevel = value;
@@ -789,10 +753,11 @@ void *UDP_monitoring_thread(void *param)
                 &len); 
         buffer[nBufferLength] = '\0'; 
 
-        printf("[UDP Thread] Receive (Len=%d)  %s\n", nBufferLength, buffer);
+        //printf("[UDP Thread] Receive (Len=%d)  %s\n", nBufferLength, buffer);
 
         if (strncmp(buffer, "PZEM_SOLAIRE", 12) == 0)
         {
+            printf("[UDP Thread] Receive (Len=%d)  %s\n", nBufferLength, buffer);
             s1 = strchr(buffer, ' ');
             if (s1)
             {
@@ -832,7 +797,7 @@ void *UDP_monitoring_thread(void *param)
                 if (p != -1)
                 {
                     G_Puissance_PZEM_EDF = p;
-                    //printf("[UDP Thread] Receive Puissance PZEM EDF=%d\n", G_Puissance_PZEM_EDF);
+                    printf("[UDP Thread] Receive Puissance PZEM EDF=%d\n", G_Puissance_PZEM_EDF);
                 }
                 else
                     logError("[UDP Thread] PZEM_EDF : -1 received, previous value reused\n"); 
@@ -874,13 +839,13 @@ void *UDP_monitoring_thread(void *param)
                     if (G_pAppEDF == 0)
                     {
                         G_prodEDF = G_Puissance_PZEM_EDF;
-                        //printf("[UDP Thread] Receive Puissance PZEM Production=%d\n", G_prodEDF);
+                        printf("[UDP Thread] Receive Puissance PZEM Production=%d\n", G_prodEDF);
                     }
                     else
                     {
-                       G_pAppEDF = G_Puissance_PZEM_EDF;
-                       G_prodEDF = 0;
-                       //printf("[UDP Thread] Receive Puissance PZEM Conso EDF=%d\n", G_pAppEDF);
+                        G_pAppEDF = G_Puissance_PZEM_EDF;
+                        G_prodEDF = 0;
+                        printf("[UDP Thread] Receive Puissance PZEM Conso EDF=%d\n", G_pAppEDF);
                     }
                     genHtmlDomoticzPower(DOMOTICZ_INDEX_CONSO_EDF, G_pAppEDF, G_compteurEDF);
                     if (G_prodEDF != 0)
@@ -949,11 +914,32 @@ void *UDP_monitoring_thread(void *param)
                     genHtmlDomoticzSwitch(DOMOTICZ_INDEX_POMPE, G_pump);
                     G_previousPump = G_pump;
                 }
+                G_lastReceivedTemperature = G_globalSeconds;
+                isTemperatureAlarm = 0;
             }
             else
             {
                 sprintf(tmp, "[UDP Thread] Receive Temperatures with ERRORS - Keep old values [%f, %f, %f]\n", G_thSolarPanel, G_thCuve, G_thECS);
                 printf(tmp);
+            }
+        }
+        else if (strncmp(buffer, "FACT", 4) == 0)
+        {
+            float fAction;
+            fAction = *(float *)&buffer[4];
+            if (fAction >= 0.0   && fAction <= 100.0)
+            {
+                G_lastAction = fAction;
+            }
+            if (G_chargeDelestage)
+            {
+                G_T1 = *(float *)&buffer[8];
+                G_T2 = *(float *)&buffer[12];
+                printf("[UDP Thread] Receive FACT : %f %f°C %f°C\n", fAction, G_T1, G_T2);
+                genHtmlDomoticzFloat(DOMOTICZ_INDEX_T1, G_T1);
+                genHtmlDomoticzFloat(DOMOTICZ_INDEX_T2, G_T2);
+                processTemperatures();
+                genHtmlDomoticz(DOMOTICZ_INDEX_PRISE_COMMANDEE, getPowerFromIndex(G_lastAction));
             }
         }
         else if (strncmp(buffer, "COMMAND", 7) == 0)
@@ -1006,7 +992,12 @@ int main(int argc, char **argv)
     struct tm *pTime;
     struct timeval clock;
 
-    printf("logSol - Version " VERSION "\n");
+    if (argc == 2)
+    {
+        G_chargeDelestage = (unsigned long)atol(argv[1]);
+    }
+
+    printf("logSol - Version " VERSION "   - ChargeDelestage=%ld\n", G_chargeDelestage);
 	
     ret = pthread_create(&threadUDP, NULL, UDP_monitoring_thread, NULL);
     if (ret)
@@ -1021,8 +1012,6 @@ int main(int argc, char **argv)
         perror("Error while creating UDP socket"); 
         exit(-1);
     }
-    // Initialize ESP Relay
-    setESPRelay(0, 1, 1);
 
     loadData();
 
@@ -1032,8 +1021,17 @@ int main(int argc, char **argv)
         while (count < 5 && powerReceived == 0 )
         {
             sleep(1);
+            G_globalSeconds++;
+            if (G_globalSeconds == 0)
+                G_lastReceivedTemperature = 0;
             count++;
         }
+    
+        if ((G_globalSeconds - G_lastReceivedTemperature) > 120)
+        {
+            isTemperatureAlarm = 1;
+        }
+
         powerReceived = 0;
         printf("                                                                                  Puissance Solaire:%d ConsoEDF:%d ProdEDF:%d\n", G_Puissance, G_pAppEDF, G_prodEDF);
         if (G_saveRequired)
@@ -1046,11 +1044,6 @@ int main(int argc, char **argv)
         {
             pTime = localtime((time_t *)&clock.tv_sec);
             genDataSmartphone(pTime);
-        }
-        if (G_Relais_1 == 0 && pTime->tm_sec < 5 && G_KACA_State)
-        {
-            // Pour demander l'envoi des temperatures
-            setESPRelay(0, 1, 1);
         }
     }
     if (G_leave)
