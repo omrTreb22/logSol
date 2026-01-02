@@ -518,7 +518,15 @@ void genDataSmartphone(struct tm *pTime)
     file_out << "@FAN " << G_fan << "<br>" << endl;
     file_out << "@KACA " << G_KACA_State << "<br>" << endl;
     file_out << "@DELESTAGE " << G_chargeDelestage << "<br>" << endl;
+    if (isTemperatureAlarm)
+    {
+        file_out << "<p style=\"color:#FF0000;\"><strong>";
+    }
     file_out << "@TEMPERATURE_ALARM " << isTemperatureAlarm << "<br>" << endl;
+    if (isTemperatureAlarm)
+    {
+        file_out << "</strong></p>";
+    }
 
     file_out << "<br>Page generee le " << pTime->tm_mday << "/" << (pTime->tm_mon+1) << "/" << (pTime->tm_year+1900) << " " \
              << pTime->tm_hour << ":" << pTime->tm_min << ":" << pTime->tm_sec << " LogSol Version " << VERSION << "</body></html>" << endl;
@@ -798,6 +806,8 @@ void *UDP_monitoring_thread(void *param)
                 {
                     G_Puissance_PZEM_EDF = p;
                     printf("[UDP Thread] Receive Puissance PZEM EDF=%d\n", G_Puissance_PZEM_EDF);
+                    G_prodEDF = 0;
+                    G_pAppEDF = G_Puissance_PZEM_EDF;
                 }
                 else
                     logError("[UDP Thread] PZEM_EDF : -1 received, previous value reused\n"); 
@@ -964,6 +974,32 @@ void *UDP_monitoring_thread(void *param)
                 processCommand(COMMAND_KACA_OFF, 0);
             }
         }
+        else if (strncmp(buffer, "TICS", 4) == 0)
+        {
+            int index = *(int *)&buffer[4];
+            int pApp = *(int *)&buffer[8];
+            int sequence = *(int *)&buffer[12];
+
+            if (index != 0)
+                G_compteurEDF = index;
+            if (pApp == 0)
+            {
+                G_pAppEDF = 0;
+                G_prodEDF = G_Puissance_PZEM_EDF;
+                G_globalProdEDF += (G_prodEDF / 60 / 12);
+                genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, G_prodEDF, G_globalProdEDF);
+            }
+            else
+            {
+                G_pAppEDF = G_Puissance_PZEM_EDF;
+                G_prodEDF = 0;
+                genHtmlDomoticzPower(DOMOTICZ_INDEX_PROD_EDF, 0, G_globalProdEDF);
+            }
+            genHtmlDomoticzPower(DOMOTICZ_INDEX_CONSO_EDF, G_pAppEDF, G_compteurEDF);
+            printf("[UDP Thread] Receive TICS index=%d pApp=%d sequence=%d\n", index, pApp, sequence);
+            powerReceived = 1;
+            processPower();
+        }
         else
         {
             sprintf(tmp, "[UDP Thread] Data not recognized : %s\n", buffer);
@@ -1044,6 +1080,14 @@ int main(int argc, char **argv)
         {
             pTime = localtime((time_t *)&clock.tv_sec);
             genDataSmartphone(pTime);
+
+            // Remise a zero du 1erJanvier
+            if (pTime->tm_mon == 0 && pTime->tm_mday == 1 && pTime->tm_hour == 0 && pTime->tm_min == 0 && pTime->tm_sec < 5)
+            {
+                G_TotalPuissanceForKm = 0;
+                G_multiple1Mkm = 0;
+                logError("Remise a zero du kilometrage annuel au 1er Janvier 0h00");
+            }
         }
     }
     if (G_leave)
